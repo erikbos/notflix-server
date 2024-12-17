@@ -1,25 +1,25 @@
-
-package main;
+package main
 
 import (
-	"fmt"
-	"strings"
 	"database/sql"
+	"fmt"
 	"os"
+	"strings"
+
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type DbItem struct {
-	Id		string
-	Name		string
-	Votes		int
-	Genre		string
-	Rating		float32
-	Year		int
-	NfoTime		int64
-	FirstVideo	int64
-	LastVideo	int64
+	Id         string
+	Name       string
+	Votes      int
+	Genre      string
+	Rating     float32
+	Year       int
+	NfoTime    int64
+	FirstVideo int64
+	LastVideo  int64
 }
 
 var dbHandle *sqlx.DB
@@ -36,23 +36,22 @@ func dbInit(dbFile string) (err error) {
 	return
 }
 
-func dbInitSchema() (error) {
+func dbInitSchema() error {
 	tx, err := dbHandle.Beginx()
 	if err != nil {
 		return err
 	}
 
-	schema := `
-	CREATE TABLE items(
-		id TEXT NOT NULL PRIMARY KEY
-		name TEXT NOT NULL PRIMARY,
-		votes INTEGER,
-		year INTEGER,
-		genre TEXT NOT NULL,
-		rating REAL,
-		nfotime INTEGER NOT NULL,
-		firstvideo INTEGER NOT NULL,
-		lastvideo INTEGER NOT NULL
+	schema := `CREATE TABLE items(
+id TEXT NOT NULL PRIMARY KEY,
+name TEXT NOT NULL,
+votes INTEGER,
+year INTEGER,
+genre TEXT NOT NULL,
+rating REAL,
+nfotime INTEGER NOT NULL,
+firstvideo INTEGER NOT NULL,
+lastvideo INTEGER NOT NULL
 	);`
 	_, err = tx.Exec(schema)
 	if err != nil {
@@ -60,7 +59,7 @@ func dbInitSchema() (error) {
 		return err
 	}
 
-	index := "CREATE INDEX items_name_idx ON items (name);";
+	index := "CREATE INDEX items_name_idx ON items (name);"
 	_, err = tx.Exec(index)
 	if err != nil {
 		tx.Rollback()
@@ -72,7 +71,7 @@ func dbInitSchema() (error) {
 }
 
 // Check NFO file.
-func itemCheckNfo (item *Item) (updated bool) {
+func itemCheckNfo(item *Item) (updated bool) {
 	if item.NfoPath == "" {
 		return
 	}
@@ -115,29 +114,33 @@ func itemCheckNfo (item *Item) (updated bool) {
 func dbInsertItem(tx *sqlx.Tx, item *Item) (err error) {
 	item.Genrestring = strings.Join(item.Genre, ",")
 	_, err = tx.NamedExec(
-	`INSERT INTO items(id, name, votes, genre, rating, year, nfotime, ` +
-	`		firstvideo, lastvideo)` +
-	`VALUES (:id, :name, :votes, :genrestring, :rating, :year, :nfotime, ` +
-	`		:firstvideo, :lastvideo)`, item)
+		`INSERT INTO items(id, name, votes, genre, rating, year, nfotime, `+
+			`		firstvideo, lastvideo)`+
+			`VALUES (:id, :name, :votes, :genrestring, :rating, :year, :nfotime, `+
+			`		:firstvideo, :lastvideo)`, item)
 	return
 }
 
 func dbUpdateItem(tx *sqlx.Tx, item *Item) (err error) {
 	item.Genrestring = strings.Join(item.Genre, ",")
 	_, err = tx.NamedExec(
-	`UPDATE items SET votes = :votes, genre = :genrestring, rating = :rating, ` +
-	`		year = :year, nfotime = :nfotime, ` +
-	`		firstvideo = :firstvideo, lastvideo = :lastvideo ` +
-	`		WHERE name = :name`, item)
+		`UPDATE items SET votes = :votes, genre = :genrestring, rating = :rating, `+
+			`		year = :year, nfotime = :nfotime, `+
+			`		firstvideo = :firstvideo, lastvideo = :lastvideo `+
+			`		WHERE name = :name`, item)
 	return
 }
-
 
 func dbLoadItem(coll *Collection, item *Item) {
 	var data DbItem
 
+	coll = nil
+
 	// Find this item by name in the database.
 	tx, err := dbHandle.Beginx()
+	if err != nil {
+		return
+	}
 	err = dbHandle.Get(&data, "SELECT * FROM items WHERE name=? LIMIT 1", item.Name)
 
 	// Not in database yet, insert
@@ -187,7 +190,7 @@ func dbLoadItem(coll *Collection, item *Item) {
 	}
 
 	if item.FirstVideo != data.FirstVideo ||
-	   item.LastVideo != data.LastVideo {
+		item.LastVideo != data.LastVideo {
 		needUpdate = true
 	}
 
@@ -206,5 +209,4 @@ func dbLoadItem(coll *Collection, item *Item) {
 	}
 
 	tx.Commit()
-	return
 }

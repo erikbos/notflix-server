@@ -72,3 +72,12 @@ Each source of a collection is mapped to /\_data/:source. That's why the
 baseuri is included in each item, since there can be multiple baseuris
 in one collection.
 
+## Development
+
+ImageMagick is required:
+
+```shell
+brew unlink imagemagick
+brew install imagemagick@6 && brew link imagemagick@6 --force
+```
+
