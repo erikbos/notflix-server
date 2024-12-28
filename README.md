@@ -77,6 +77,7 @@ in one collection.
 ImageMagick is required:
 
 ```shell
+# You'll likely have to uninstall Imagemagick latest, which is v7
 brew unlink imagemagick
 brew install imagemagick@6 && brew link imagemagick@6 --force
 ```
