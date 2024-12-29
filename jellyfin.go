@@ -188,7 +188,7 @@ func userViewsHandler(w http.ResponseWriter, r *http.Request) {
 			SpecialFeatureCount:      0,
 			DisplayPreferencesID:     displayPreferencesID,
 			LocationType:             "Remote",
-			Path:                     "path",
+			Path:                     "/collection",
 			ExternalUrls:             []JFExternalUrls{},
 			MediaType:                "Unknown",
 			LockData:                 false,
@@ -319,9 +319,6 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 		CanDelete:                false,
 		CanDownload:              false,
 		SpecialFeatureCount:      0,
-		BackdropImageTags: []string{
-			itemID,
-		},
 	}
 	switch c.Type {
 	case "movies":
@@ -366,18 +363,6 @@ func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFI
 		ID:                      i.Id,
 		Etag:                    idHash(i.Id),
 		DateCreated:             fileStat.ModTime().UTC().Format("2001-01-01T00:00:00.0000000Z"),
-		CanDelete:               false,
-		CanDownload:             false,
-		IsFolder:                false,
-		LocationType:            "FileSystem",
-		Type:                    "Movie",
-		VideoType:               "VideoFile",
-		Container:               "mov,mp4,m4a",
-		Path:                    i.Video,
-		MediaSources:            buildMediaSource(videoFilename, i.Nfo),
-		Genres:                  i.Genre,
-		PlayAccess:              "Full",
-		ProductionYear:          i.Year,
 		PrimaryImageAspectRatio: 0.6666666666666666,
 		MediaStreams: []JFMediaStreams{
 			{
@@ -395,22 +380,29 @@ func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFI
 			},
 		},
 		ImageTags: JFImageTags{
-			Primary:  "primary_" + i.Id,
-			Backdrop: "backdrop_" + i.Id,
-			Logo:     "logo_" + i.Id,
-			Thumb:    "thumb_" + i.Id,
+			Primary: "primary_" + i.Id,
 		},
-		// EnableMediaSourceDisplay: true,
+	}
+
+	if c.Type == "movies" {
+		response.Type = "Movie"
+		response.IsFolder = false
+		response.LocationType = "FileSystem"
+		response.VideoType = "VideoFile"
+		response.Path = "file.mp4"
+		response.Container = "mov,mp4,m4a"
+		response.MediaSources = buildMediaSource(videoFilename, i.Nfo)
+
 	}
 
 	// Is this a Season item?
-	if i.Seasons != nil {
-		response.IsFolder = true
+	if c.Type == "shows" && i.Seasons != nil {
 		response.Type = "Series"
-		response.CanDownload = false
+		response.IsFolder = true
 		response.ChildCount = len(i.Seasons)
 		response.MediaSources = nil
 		response.MediaStreams = nil
+		// Required to have Infuse load backdrop of episode
 		response.BackdropImageTags = []string{
 			response.ID,
 		}
@@ -543,16 +535,15 @@ func usersItemsLatestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v http://127.0.0.1:9090/Library/VirtualFolders
-
 func libraryVirtualFoldersHandler(w http.ResponseWriter, r *http.Request) {
 	libraries := []JFMediaLibrary{}
 	for _, c := range config.Collections {
+		itemId := genCollectionID(c.SourceId)
 		l := JFMediaLibrary{
-			Name:      c.Name_,
-			ItemId:    genCollectionID(c.SourceId),
-			Locations: []string{"/"},
-			// LibraryOptions: JFLibraryOptions{
-			// },
+			Name:               c.Name_,
+			ItemId:             itemId,
+			PrimaryImageItemId: itemId,
+			Locations:          []string{"/"},
 		}
 		switch c.Type {
 		case "movies":
@@ -598,16 +589,12 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 			ChildCount:         len(s.Episodes),
 			RecursiveItemCount: len(s.Episodes),
 			ImageTags: JFImageTags{
-				Primary:  "season",
-				Backdrop: "season2",
+				Primary: "season",
+				// Backdrop: "season2",
 			},
 			DateCreated:    "2022-01-01T00:00:00.0000000Z",
 			PremiereDate:   "2022-01-01T00:00:00.0000000Z",
 			ProductionYear: 2022,
-			// ParentBackdropImageTags: []string{
-			// 	showId,
-			// },
-			// ParentBackdropItemId: showId,
 		}
 		// season.UserData.LastPlayedDate = time.Now().UTC()
 
@@ -703,16 +690,17 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 
 	filename := c.Directory + "/" + episodebasepath + ".mp4"
 	response = JFItem{
-		Type:         "Episode",
-		IsFolder:     false,
-		ServerID:     serverID,
-		ID:           episodeid,
-		Etag:         idHash(episodeid),
-		Path:         "episode.mp4",
-		SeriesName:   showItem.Name,
-		SeriesID:     idHash(showItem.Name),
-		SeasonName:   "Season " + episodeNfo.Season,
-		Name:         episodeNfo.Title,
+		Type:       "Episode",
+		IsFolder:   false,
+		ServerID:   serverID,
+		ID:         episodeid,
+		Etag:       idHash(episodeid),
+		Path:       "episode.mp4",
+		SeriesName: showItem.Name,
+		SeriesID:   idHash(showItem.Name),
+		SeasonName: "Season " + episodeNfo.Season,
+		Name:       episodeNfo.Title,
+		// fixme:
 		SortName:     fmt.Sprintf("%03s - %04s - %s", episodeNfo.Season, episodeNfo.Episode, episodeNfo.Title),
 		Overview:     episodeNfo.Plot,
 		LocationType: "FileSystem",
@@ -726,10 +714,15 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 		},
 		DateCreated: "2023-01-01T00:00:00.0000000Z",
 	}
-	// Get a bunch of metadata from series nfo
+	// Get a bunch of metadata from series-level nfo
 	if showItem.Nfo != nil {
 		enrichResponseWithNFO(&response, showItem.Nfo)
 	}
+
+	// Remove ratings as we do not want ratings from series apply to an episode
+	response.OfficialRating = ""
+	response.CommunityRating = 0
+
 	// Enrich and override metadata from episode nfo (more specific)
 	enrichResponseWithNFO(&response, episodeNfo)
 	return response, nil
@@ -766,12 +759,16 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 		response.CommunityRating = math.Round(float64(n.Rating)*10) / 10
 	}
 
-	for _, genre := range n.Genre {
-		g := JFGenreItems{
-			Name: genre,
-			ID:   idHash(genre),
+	if len(n.Genre) != 0 {
+		// fixme: why do we duplicate both fields?
+		response.Genres = n.Genre
+		for _, genre := range n.Genre {
+			g := JFGenreItems{
+				Name: genre,
+				ID:   idHash(genre),
+			}
+			response.GenreItems = append(response.GenreItems, g)
 		}
-		response.GenreItems = append(response.GenreItems, g)
 	}
 
 	if n.Studio != "" {
@@ -918,7 +915,6 @@ func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaS
 		mediasources[0].Bitrate = episodeNfo.FileInfo.StreamDetails.Video.Bitrate
 		mediasources[0].MediaStreams[0].AverageFrameRate = float64(episodeNfo.FileInfo.StreamDetails.Video.FrameRate)
 		mediasources[0].MediaStreams[0].RealFrameRate = float64(episodeNfo.FileInfo.StreamDetails.Video.FrameRate)
-
 	}
 
 	return
@@ -992,6 +988,9 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 	case "Backdrop":
 		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"fanart.jpg")
 		return
+		// We do not have artwork on disk for logo requests
+		// case "Logo":
+		// return
 	}
 	log.Printf("Unknown image type requested: %s\n", vars["type"])
 	http.Error(w, "Item image not found", http.StatusNotFound)
