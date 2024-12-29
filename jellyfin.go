@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Eyevinn/mp4ff/mp4"
 	"github.com/gorilla/mux"
 )
 
@@ -57,12 +58,13 @@ func addJellyfinHandlers(s *mux.Router) {
 }
 
 const (
+	// Misc IDs for api responses
 	serverID             = "2b11644442754f02a0c1e45d2a9f5c71"
 	userID               = "2b1ec0a52b09456c9823a367d84ac9e5"
 	collectionRootID     = "e9d5075a555c1cbc394eec4cef295274"
 	displayPreferencesID = "f137a2dd21bbc1b99aa5c0f6bf02a805"
 
-	// item prefixes
+	// itemid prefixes
 	itemprefix_collection = "collection_"
 	itemprefix_show       = "show_"
 	itemprefix_episode    = "episode_"
@@ -74,9 +76,9 @@ const (
 )
 
 var loggedInUser = JFUser{
-	Name:                      "erik",
-	ServerId:                  serverID,
 	Id:                        userID,
+	ServerId:                  serverID,
+	Name:                      "erik",
 	HasPassword:               true,
 	HasConfiguredPassword:     true,
 	HasConfiguredEasyPassword: false,
@@ -86,7 +88,6 @@ var loggedInUser = JFUser{
 }
 
 // curl -v http://127.0.0.1:9090/System/Info/Public
-
 func systemInfoHandler(w http.ResponseWriter, r *http.Request) {
 	response := JFSystemInfoResponse{
 		Id:           serverID,
@@ -101,7 +102,6 @@ func systemInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v -X POST http://127.0.0.1:9090/Users/AuthenticateByName
-
 // Authenticates a user by name.
 // (POST /Users/AuthenticateByName)
 func authenticateByNameHandler(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +126,6 @@ func authenticateByNameHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/DisplayPreferences/usersettings?userId=2b1ec0a52b09456c9823a367d84ac9e5&client=emby'
-
 func displayPreferencesHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(DisplayPreferencesResponse{
 		ID:                 "3ce5b65d-e116-d731-65d1-efc4a30ec35c",
@@ -152,13 +151,11 @@ func displayPreferencesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5
-
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(loggedInUser, w)
 }
 
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Views?IncludeExternalContent=false'
-
 func userViewsHandler(w http.ResponseWriter, r *http.Request) {
 	items := []JFItem{}
 	var itemcount int
@@ -214,7 +211,6 @@ func userViewsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/GroupingOptions
-
 func usersGroupingOptionsHandler(w http.ResponseWriter, r *http.Request) {
 	collections := []JFCollection{}
 	for _, c := range config.Collections {
@@ -228,7 +224,6 @@ func usersGroupingOptionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items/Resume?Limit=12&MediaTypes=Video&Recursive=true&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount'
-
 func usersItemsResumeHandler(w http.ResponseWriter, r *http.Request) {
 	response := JFUsersItemsResumeResponse{
 		Items:            []string{},
@@ -690,20 +685,19 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 
 	filename := c.Directory + "/" + episodebasepath + ".mp4"
 	response = JFItem{
-		Type:       "Episode",
-		IsFolder:   false,
-		ServerID:   serverID,
-		ID:         episodeid,
-		Etag:       idHash(episodeid),
-		Path:       "episode.mp4",
-		SeriesName: showItem.Name,
-		SeriesID:   idHash(showItem.Name),
-		SeasonName: "Season " + episodeNfo.Season,
-		Name:       episodeNfo.Title,
-		// fixme:
+		Type:         "Episode",
+		ID:           episodeid,
+		Etag:         idHash(episodeid),
+		ServerID:     serverID,
+		Path:         "episode.mp4",
+		SeriesName:   showItem.Name,
+		SeriesID:     idHash(showItem.Name),
+		SeasonName:   "Season " + episodeNfo.Season,
+		Name:         episodeNfo.Title,
 		SortName:     fmt.Sprintf("%03s - %04s - %s", episodeNfo.Season, episodeNfo.Episode, episodeNfo.Title),
 		Overview:     episodeNfo.Plot,
 		LocationType: "FileSystem",
+		IsFolder:     false,
 		MediaType:    "Video",
 		VideoType:    "VideoFile",
 		Container:    "mov,mp4,m4a",
@@ -810,6 +804,44 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 
 func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaSources) {
 	basename := filepath.Base(filename)
+
+	start := time.Now()
+
+	file, err := os.Open(filename)
+	if err == nil {
+		defer file.Close()
+
+		// Parse the MP4 file
+		parsedFile, err := mp4.DecodeFile(file, mp4.WithDecodeMode(mp4.DecModeLazyMdat))
+		if err != nil {
+			log.Printf("Failed to parse MP4 file %s: %v", filename, err)
+			return
+		}
+
+		for index, track := range parsedFile.Moov.Traks {
+			log.Printf("\n%s track: %d\ndata: %+v\n", filename, index, track)
+
+			// if track.Mdia.Hdlr.HandlerType == "vide" {
+			// 	codec = "H264" // Simplified assumption, refine as needed
+			// 	typeStr = "Video"
+			// 	height = int(track.Tkhd.Height >> 16)
+			// 	width = int(track.Tkhd.Width >> 16)
+			// 	if track.Mdia.Minf.Stbl.Stsd.Av01 != nil {
+			// 		averageFrameRate = float64(track.Mdia.Minf.Stbl.Stts.GetSampleCount()) / float64(track.Mdia.Minf.Stbl.Stts.GetTotalTime())
+			// 	}
+			// } else if track.Mdia.Hdlr.HandlerType == "soun" {
+			// 	codec = "AAC" // Simplified assumption, refine as needed
+			// 	typeStr = "Audio"
+			// 	if track.Mdia.Minf.Stbl.Stsd.Mp4a != nil {
+			// 		channels = int(track.Mdia.Minf.Stbl.Stsd.Mp4a.ChannelCount)
+			// 		sampleRate = int(track.Mdia.Minf.Stbl.Stsd.Mp4a.SampleRate >> 16)
+			// 	}
+			// }
+		}
+	}
+	end := time.Now()
+	latency := end.Sub(start)
+	log.Printf("\n%s latency %v\n\n", filename, latency)
 
 	mediasources = []JFMediaSources{
 		{
@@ -997,7 +1029,6 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/Items/68d73f6f48efedb7db697bf9fee580cb/PlaybackInfo?UserId=2b1ec0a52b09456c9823a367d84ac9e5'
-
 func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	itemId := vars["item"]
