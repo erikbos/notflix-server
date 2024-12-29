@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Eyevinn/mp4ff/mp4"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
 
@@ -27,18 +28,16 @@ func addJellyfinHandlers(s *mux.Router) {
 	r := s.UseEncodedPath()
 
 	r.HandleFunc("/System/Info/Public", systemInfoHandler)
-
-	r.HandleFunc("/Users/AuthenticateByName", authenticateByNameHandler).Methods("POST")
 	r.HandleFunc("/DisplayPreferences/usersettings", displayPreferencesHandler)
 
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5", usersHandler)
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/Views", userViewsHandler)
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/GroupingOptions", usersGroupingOptionsHandler)
-
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items", usersItemsHandler)
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items/Latest", usersItemsLatestHandler)
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items/{item}", usersItemHandler)
-	r.HandleFunc("/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items/Resume", usersItemsResumeHandler)
+	r.HandleFunc("/Users/AuthenticateByName", usersAuthenticateByNameHandler).Methods("POST")
+	r.HandleFunc("/Users/{user}", usersHandler)
+	r.HandleFunc("/Users/{user}/Views", usersViewsHandler)
+	r.HandleFunc("/Users/{user}/GroupingOptions", usersGroupingOptionsHandler)
+	r.HandleFunc("/Users/{user}/Items", usersItemsHandler)
+	r.HandleFunc("/Users/{user}/Items/Latest", usersItemsLatestHandler)
+	r.HandleFunc("/Users/{user}/Items/{item}", usersItemHandler)
+	r.HandleFunc("/Users/{user}/Items/Resume", usersItemsResumeHandler)
 
 	r.HandleFunc("/Library/VirtualFolders", libraryVirtualFoldersHandler)
 	r.HandleFunc("/Shows/NextUp", showsNextUpHandler)
@@ -47,7 +46,7 @@ func addJellyfinHandlers(s *mux.Router) {
 
 	r.HandleFunc("/Items/{item}/Images/{type}", itemsImagesHandler)
 	r.HandleFunc("/Items/{item}/PlaybackInfo", itemsPlaybackInfoHandler)
-	r.HandleFunc("/MediaSegments/{item}", itemsMediaSegmentsHandler)
+	r.HandleFunc("/MediaSegments/{item}", mediaSegmentsHandler)
 	r.HandleFunc("/Videos/{item}/stream", videoStreamHandler)
 
 	r.HandleFunc("/Persons", personsHandler)
@@ -55,23 +54,26 @@ func addJellyfinHandlers(s *mux.Router) {
 	r.HandleFunc("/Sessions/Playing", sessionsPlayingHandler).Methods("POST")
 	r.HandleFunc("/Sessions/Playing/Progress", sessionsPlayingHandler).Methods("POST")
 
+	s.PathPrefix("/").Handler(handlers.CompressHandler(r))
 }
 
 const (
 	// Misc IDs for api responses
-	serverID             = "2b11644442754f02a0c1e45d2a9f5c71"
-	userID               = "2b1ec0a52b09456c9823a367d84ac9e5"
-	collectionRootID     = "e9d5075a555c1cbc394eec4cef295274"
-	displayPreferencesID = "f137a2dd21bbc1b99aa5c0f6bf02a805"
+	serverID              = "2b11644442754f02a0c1e45d2a9f5c71"
+	userID                = "2b1ec0a52b09456c9823a367d84ac9e5"
+	collectionRootID      = "e9d5075a555c1cbc394eec4cef295274"
+	displayPreferencesID  = "f137a2dd21bbc1b99aa5c0f6bf02a805"
+	collectionTypeMovies  = "movies"
+	collectionTypeTVShows = "tvshows"
 
 	// itemid prefixes
 	itemprefix_collection = "collection_"
 	itemprefix_show       = "show_"
 	itemprefix_episode    = "episode_"
 
-	// imagetag starting this will get HTTP-redirected
+	// imagetag prefix will get HTTP-redirected
 	tagprefix_redirect = "redirect_"
-	// imagetag starting with file_ means we'll serve the filename from local disk
+	// imagetag prefix means we will serve the filename from local disk
 	tagprefix_file = "file_"
 )
 
@@ -104,7 +106,7 @@ func systemInfoHandler(w http.ResponseWriter, r *http.Request) {
 // curl -v -X POST http://127.0.0.1:9090/Users/AuthenticateByName
 // Authenticates a user by name.
 // (POST /Users/AuthenticateByName)
-func authenticateByNameHandler(w http.ResponseWriter, r *http.Request) {
+func usersAuthenticateByNameHandler(w http.ResponseWriter, r *http.Request) {
 	response := JFAuthenticateByNameResponse{
 		User: loggedInUser,
 		SessionInfo: JFSessionInfo{
@@ -156,9 +158,8 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Views?IncludeExternalContent=false'
-func userViewsHandler(w http.ResponseWriter, r *http.Request) {
+func usersViewsHandler(w http.ResponseWriter, r *http.Request) {
 	items := []JFItem{}
-	var itemcount int
 
 	for _, c := range config.Collections {
 		itemID := genCollectionID(c.SourceId)
@@ -186,25 +187,23 @@ func userViewsHandler(w http.ResponseWriter, r *http.Request) {
 			DisplayPreferencesID:     displayPreferencesID,
 			LocationType:             "Remote",
 			Path:                     "/collection",
-			ExternalUrls:             []JFExternalUrls{},
 			MediaType:                "Unknown",
 			LockData:                 false,
 		}
 
 		switch c.Type {
 		case "movies":
-			item.CollectionType = "movies"
+			item.CollectionType = collectionTypeMovies
 		case "shows":
-			item.CollectionType = "tvshows"
+			item.CollectionType = collectionTypeTVShows
 		}
 
 		items = append(items, item)
-		itemcount++
 	}
 
 	response := JFUserViewsResponse{
 		Items:            items,
-		TotalRecordCount: itemcount,
+		TotalRecordCount: len(config.Collections),
 		StartIndex:       0,
 	}
 	serveJSON(response, w)
@@ -234,7 +233,7 @@ func usersItemsResumeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items/f137a2dd21bbc1b99aa5c0f6bf02a805?Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount'
-// handle individual item: a movie/tv collection or individual file
+// handle individual item: any type: collection, a movie/show or individual file
 func usersItemHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	itemId := vars["item"]
@@ -317,23 +316,19 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 	}
 	switch c.Type {
 	case "movies":
-		response.CollectionType = "movies"
+		response.CollectionType = collectionTypeMovies
 	case "shows":
-		response.CollectionType = "tvshows"
+		response.CollectionType = collectionTypeTVShows
 	}
 	response.SortName = response.CollectionType
 	return
 }
 
-// buildJFItem builds movie or show (from local file)
+// buildJFItem builds movie or show from db
 func buildJFItem(c *Collection, i *Item) (response JFItem) {
+	// fixme: this stats() either show directory or video file, hmm
 	filename := c.Directory + "/" + i.Name + "/" + i.Video
-	return buildJFItemFile(c, i, filename)
-}
-
-// builds JFItem of local file
-func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFItem) {
-	file, err := os.Open(videoFilename)
+	file, err := os.Open(filename)
 	if err != nil {
 		return
 	}
@@ -341,11 +336,6 @@ func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFI
 	fileStat, err := file.Stat()
 	if err != nil {
 		return
-	}
-	file, err = os.Open(i.NfoPath)
-	if err == nil {
-		i.Nfo = decodeNfo(file)
-		file.Close()
 	}
 
 	response = JFItem{
@@ -379,6 +369,15 @@ func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFI
 		},
 	}
 
+	// Lazy load NFO
+	if i.Nfo == nil {
+		file, err = os.Open(i.NfoPath)
+		if err == nil {
+			i.Nfo = decodeNfo(file)
+			file.Close()
+		}
+	}
+
 	if c.Type == "movies" {
 		response.Type = "Movie"
 		response.IsFolder = false
@@ -386,12 +385,11 @@ func buildJFItemFile(c *Collection, i *Item, videoFilename string) (response JFI
 		response.VideoType = "VideoFile"
 		response.Path = "file.mp4"
 		response.Container = "mov,mp4,m4a"
-		response.MediaSources = buildMediaSource(videoFilename, i.Nfo)
+		response.MediaSources = buildMediaSource(filename, i.Nfo)
 
 	}
 
-	// Is this a Season item?
-	if c.Type == "shows" && i.Seasons != nil {
+	if c.Type == "shows" {
 		response.Type = "Series"
 		response.IsFolder = true
 		response.ChildCount = len(i.Seasons)
@@ -542,9 +540,9 @@ func libraryVirtualFoldersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		switch c.Type {
 		case "movies":
-			l.CollectionType = "movies"
+			l.CollectionType = collectionTypeMovies
 		case "shows":
-			l.CollectionType = "tvshows"
+			l.CollectionType = collectionTypeTVShows
 		}
 		libraries = append(libraries, l)
 	}
@@ -675,14 +673,6 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 		return
 	}
 
-	var episodeNfo *Nfo
-	nfofile := c.Directory + "/" + episodebasepath + ".nfo"
-	file, err := os.Open(nfofile)
-	if err == nil {
-		episodeNfo = decodeNfo(file)
-		file.Close()
-	}
-
 	filename := c.Directory + "/" + episodebasepath + ".mp4"
 	response = JFItem{
 		Type:         "Episode",
@@ -692,22 +682,18 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 		Path:         "episode.mp4",
 		SeriesName:   showItem.Name,
 		SeriesID:     idHash(showItem.Name),
-		SeasonName:   "Season " + episodeNfo.Season,
-		Name:         episodeNfo.Title,
-		SortName:     fmt.Sprintf("%03s - %04s - %s", episodeNfo.Season, episodeNfo.Episode, episodeNfo.Title),
-		Overview:     episodeNfo.Plot,
 		LocationType: "FileSystem",
 		IsFolder:     false,
 		MediaType:    "Video",
 		VideoType:    "VideoFile",
 		Container:    "mov,mp4,m4a",
 		HasSubtitles: true,
-		MediaSources: buildMediaSource(filename, episodeNfo),
 		ImageTags: JFImageTags{
 			Primary: "episode",
 		},
 		DateCreated: "2023-01-01T00:00:00.0000000Z",
 	}
+
 	// Get a bunch of metadata from series-level nfo
 	if showItem.Nfo != nil {
 		enrichResponseWithNFO(&response, showItem.Nfo)
@@ -717,31 +703,50 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 	response.OfficialRating = ""
 	response.CommunityRating = 0
 
+	// Enrich and override metadata from episode nfo, if available, as it is more specific
+	var episodeNfo *Nfo
+	nfofile := c.Directory + "/" + episodebasepath + ".nfo"
+	file, err := os.Open(nfofile)
+	if err != nil {
+		return
+	}
+	episodeNfo = decodeNfo(file)
+	file.Close()
+
+	// response.Name = episodeNfo.Title
+	// response.SortName = fmt.Sprintf("%03s - %04s - %s", episodeNfo.Season, episodeNfo.Episode, episodeNfo.Title)
+	// response.Overview = episodeNfo.Plot
+	response.MediaSources = buildMediaSource(filename, episodeNfo)
+
 	// Enrich and override metadata from episode nfo (more specific)
 	enrichResponseWithNFO(&response, episodeNfo)
 	return response, nil
 }
 
 func enrichResponseWithNFO(response *JFItem, n *Nfo) {
+	if n == nil {
+		return
+	}
+
+	response.Name = n.Title
+	response.Overview = n.Plot
+	response.Taglines = []string{n.Tagline}
+
+	// Handle episode naming & numbering
+	response.SeasonName = "Season " + n.Season
+
 	if n.Season != "" {
 		response.ParentIndexNumber, _ = strconv.Atoi(n.Season)
 	}
 	if n.Episode != "" {
 		response.IndexNumber, _ = strconv.Atoi(n.Episode)
 	}
-
-	if n.Plot != "" {
-		response.Overview = n.Plot
-	}
-
-	if n.Tagline != "" {
-		response.Taglines = []string{n.Tagline}
+	if response.ParentIndexNumber != 0 && response.IndexNumber != 0 {
+		response.SortName = fmt.Sprintf("%03s - %04s - %s", n.Season, n.Episode, n.Title)
 	}
 
 	// TV-14
-	if n.Mpaa != "" {
-		response.OfficialRating = n.Mpaa
-	}
+	response.OfficialRating = n.Mpaa
 
 	// ProviderIds: JFProviderIds{
 	// 	Tmdb:           "9659",
@@ -754,9 +759,10 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 	}
 
 	if len(n.Genre) != 0 {
+		normalizedGenres := normalizeGenres(n.Genre)
 		// fixme: why do we duplicate both fields?
-		response.Genres = n.Genre
-		for _, genre := range n.Genre {
+		response.Genres = normalizedGenres
+		for _, genre := range normalizedGenres {
 			g := JFGenreItems{
 				Name: genre,
 				ID:   idHash(genre),
@@ -1048,7 +1054,7 @@ func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // return commercial, preview, recap, outro, intro segments of an item
-func itemsMediaSegmentsHandler(w http.ResponseWriter, r *http.Request) {
+func mediaSegmentsHandler(w http.ResponseWriter, r *http.Request) {
 	response := UserItemsResponse{
 		Items:            []JFItem{},
 		TotalRecordCount: 0,

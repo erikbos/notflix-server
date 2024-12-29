@@ -380,10 +380,9 @@ type JFUserData struct {
 }
 
 type JFImageTags struct {
-	Primary  string `json:"Primary,omitempty"`
-	Backdrop string `json:"Backdrop,omitempty"`
-	Logo     string `json:"Logo,omitempty"`
-	Thumb    string `json:"Thumb,omitempty"`
+	Primary string `json:"Primary,omitempty"`
+	Logo    string `json:"Logo,omitempty"`
+	Thumb   string `json:"Thumb,omitempty"`
 }
 
 type UserItemsResponse struct {
