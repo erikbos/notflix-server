@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/Eyevinn/mp4ff/mp4"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
@@ -349,24 +349,24 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 		Etag:                    idHash(i.Id),
 		DateCreated:             fileStat.ModTime().UTC().Format("2001-01-01T00:00:00.0000000Z"),
 		PrimaryImageAspectRatio: 0.6666666666666666,
-		MediaStreams: []JFMediaStreams{
-			{
-				Codec:              "h264",
-				CodecTag:           "avc1",
-				Language:           "eng",
-				TimeBase:           "1/16000",
-				VideoRange:         "SDR",
-				VideoRangeType:     "SDR",
-				AudioSpatialFormat: "None",
-				DisplayTitle:       "720p H264 SDR",
-				IsInterlaced:       false,
-				Height:             546,
-				Width:              1280,
-			},
-		},
 		ImageTags: JFImageTags{
 			Primary: "primary_" + i.Id,
 		},
+		// MediaStreams: []JFMediaStreams{
+		// 	{
+		// 		Codec:              "h264",
+		// 		CodecTag:           "avc1",
+		// 		Language:           "eng",
+		// 		TimeBase:           "1/16000",
+		// 		VideoRange:         "SDR",
+		// 		VideoRangeType:     "SDR",
+		// 		AudioSpatialFormat: "None",
+		// 		DisplayTitle:       "720p H264 SDR",
+		// 		IsInterlaced:       false,
+		// 		Height:             546,
+		// 		Width:              1280,
+		// 	},
+		// },
 	}
 
 	// Lazy load NFO
@@ -808,47 +808,15 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 	}
 }
 
+// CustomWriter is an io.Writer implementation that stores all written strings.
+type CustomWriter struct {
+	mu    *sync.Mutex
+	store []byte
+}
+
 func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaSources) {
+	// todo: this should be replaced with actual mp4 file detail gathering
 	basename := filepath.Base(filename)
-
-	start := time.Now()
-
-	file, err := os.Open(filename)
-	if err == nil {
-		defer file.Close()
-
-		// Parse the MP4 file
-		parsedFile, err := mp4.DecodeFile(file, mp4.WithDecodeMode(mp4.DecModeLazyMdat))
-		if err != nil {
-			log.Printf("Failed to parse MP4 file %s: %v", filename, err)
-			return
-		}
-
-		for index, track := range parsedFile.Moov.Traks {
-			log.Printf("\n%s track: %d\ndata: %+v\n", filename, index, track)
-
-			// if track.Mdia.Hdlr.HandlerType == "vide" {
-			// 	codec = "H264" // Simplified assumption, refine as needed
-			// 	typeStr = "Video"
-			// 	height = int(track.Tkhd.Height >> 16)
-			// 	width = int(track.Tkhd.Width >> 16)
-			// 	if track.Mdia.Minf.Stbl.Stsd.Av01 != nil {
-			// 		averageFrameRate = float64(track.Mdia.Minf.Stbl.Stts.GetSampleCount()) / float64(track.Mdia.Minf.Stbl.Stts.GetTotalTime())
-			// 	}
-			// } else if track.Mdia.Hdlr.HandlerType == "soun" {
-			// 	codec = "AAC" // Simplified assumption, refine as needed
-			// 	typeStr = "Audio"
-			// 	if track.Mdia.Minf.Stbl.Stsd.Mp4a != nil {
-			// 		channels = int(track.Mdia.Minf.Stbl.Stsd.Mp4a.ChannelCount)
-			// 		sampleRate = int(track.Mdia.Minf.Stbl.Stsd.Mp4a.SampleRate >> 16)
-			// 	}
-			// }
-		}
-	}
-	end := time.Now()
-	latency := end.Sub(start)
-	log.Printf("\n%s latency %v\n\n", filename, latency)
-
 	mediasources = []JFMediaSources{
 		{
 			ID:                    idHash(filename),
@@ -876,26 +844,26 @@ func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaS
 			Formats:               []string{},
 			MediaStreams: []JFMediaStreams{
 				{
-					Codec:              "h264",
-					CodecTag:           "avc1",
-					Language:           "eng",
-					TimeBase:           "1/16000",
-					VideoRange:         "SDR",
-					VideoRangeType:     "SDR",
-					AudioSpatialFormat: "None",
-					DisplayTitle:       "720p H264 SDR",
-					NalLengthSize:      "4",
-					IsInterlaced:       false,
-					IsAVC:              true,
-					BitDepth:           8,
-					RefFrames:          1,
-					IsDefault:          true,
-					IsForced:           false,
-					IsHearingImpaired:  false,
-					Height:             546,
-					Width:              1280,
-					// AverageFrameRate:       23.81,
-					// RealFrameRate:          23.81,
+					Codec:                  "h264",
+					CodecTag:               "avc1",
+					Language:               "eng",
+					TimeBase:               "1/16000",
+					VideoRange:             "SDR",
+					VideoRangeType:         "SDR",
+					AudioSpatialFormat:     "None",
+					DisplayTitle:           "720p H264 SDR",
+					NalLengthSize:          "4",
+					IsInterlaced:           false,
+					IsAVC:                  true,
+					BitDepth:               8,
+					RefFrames:              1,
+					IsDefault:              true,
+					IsForced:               false,
+					IsHearingImpaired:      false,
+					Height:                 546,
+					Width:                  1280,
+					AverageFrameRate:       23.98,
+					RealFrameRate:          23.98,
 					Profile:                "High",
 					Type:                   "Video",
 					AspectRatio:            "2.35:1",
@@ -936,25 +904,11 @@ func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaS
 					Level:                  0,
 				},
 			},
-			MediaAttachments:        []JFMediaAttachments{},
-			RequiredHTTPHeaders:     JFRequiredHTTPHeaders{},
-			TranscodingSubProtocol:  "http",
-			DefaultAudioStreamIndex: 1,
+			RequiredHTTPHeaders:    JFRequiredHTTPHeaders{},
+			TranscodingSubProtocol: "http",
+			// DefaultAudioStreamIndex: 1,
 		},
 	}
-
-	// Populate data from nfo: duration, bitrate, framerate if available
-	if episodeNfo != nil && episodeNfo.FileInfo != nil &&
-		episodeNfo.FileInfo.StreamDetails != nil &&
-		episodeNfo.FileInfo.StreamDetails.Video != nil {
-
-		mediasources[0].RunTimeTicks = int64(episodeNfo.FileInfo.StreamDetails.Video.DurationInSeconds * 10000000)
-
-		mediasources[0].Bitrate = episodeNfo.FileInfo.StreamDetails.Video.Bitrate
-		mediasources[0].MediaStreams[0].AverageFrameRate = float64(episodeNfo.FileInfo.StreamDetails.Video.FrameRate)
-		mediasources[0].MediaStreams[0].RealFrameRate = float64(episodeNfo.FileInfo.StreamDetails.Video.FrameRate)
-	}
-
 	return
 }
 
