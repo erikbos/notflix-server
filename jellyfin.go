@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/handlers"
@@ -27,34 +26,36 @@ import (
 func addJellyfinHandlers(s *mux.Router) {
 	r := s.UseEncodedPath()
 
-	r.HandleFunc("/System/Info/Public", systemInfoHandler)
-	r.HandleFunc("/DisplayPreferences/usersettings", displayPreferencesHandler)
+	gzip := func(handler http.HandlerFunc) http.Handler {
+		return handlers.CompressHandler(http.HandlerFunc(handler))
+	}
 
-	r.HandleFunc("/Users/AuthenticateByName", usersAuthenticateByNameHandler).Methods("POST")
-	r.HandleFunc("/Users/{user}", usersHandler)
-	r.HandleFunc("/Users/{user}/Views", usersViewsHandler)
-	r.HandleFunc("/Users/{user}/GroupingOptions", usersGroupingOptionsHandler)
-	r.HandleFunc("/Users/{user}/Items", usersItemsHandler)
-	r.HandleFunc("/Users/{user}/Items/Latest", usersItemsLatestHandler)
-	r.HandleFunc("/Users/{user}/Items/{item}", usersItemHandler)
-	r.HandleFunc("/Users/{user}/Items/Resume", usersItemsResumeHandler)
+	r.Handle("/System/Info/Public", gzip(systemInfoHandler))
+	r.Handle("/DisplayPreferences/usersettings", gzip(displayPreferencesHandler))
 
-	r.HandleFunc("/Library/VirtualFolders", libraryVirtualFoldersHandler)
-	r.HandleFunc("/Shows/NextUp", showsNextUpHandler)
-	r.HandleFunc("/Shows/{show}/Seasons", showsSeasonsHandler)
-	r.HandleFunc("/Shows/{show}/Episodes", showsEpisodesHandler)
+	r.Handle("/Users/AuthenticateByName", gzip(usersAuthenticateByNameHandler)).Methods("POST")
+	r.Handle("/Users/{user}", gzip(usersHandler))
+	r.Handle("/Users/{user}/Views", gzip(usersViewsHandler))
+	r.Handle("/Users/{user}/GroupingOptions", gzip(usersGroupingOptionsHandler))
+	r.Handle("/Users/{user}/Items", gzip(usersItemsHandler))
+	r.Handle("/Users/{user}/Items/Latest", gzip(usersItemsLatestHandler))
+	r.Handle("/Users/{user}/Items/{item}", gzip(usersItemHandler))
+	r.Handle("/Users/{user}/Items/Resume", gzip(usersItemsResumeHandler))
 
-	r.HandleFunc("/Items/{item}/Images/{type}", itemsImagesHandler)
-	r.HandleFunc("/Items/{item}/PlaybackInfo", itemsPlaybackInfoHandler)
-	r.HandleFunc("/MediaSegments/{item}", mediaSegmentsHandler)
-	r.HandleFunc("/Videos/{item}/stream", videoStreamHandler)
+	r.Handle("/Library/VirtualFolders", gzip(libraryVirtualFoldersHandler))
+	r.Handle("/Shows/NextUp", gzip(showsNextUpHandler))
+	r.Handle("/Shows/{show}/Seasons", gzip(showsSeasonsHandler))
+	r.Handle("/Shows/{show}/Episodes", gzip(showsEpisodesHandler))
 
-	r.HandleFunc("/Persons", personsHandler)
+	r.Handle("/Items/{item}/Images/{type}", gzip(itemsImagesHandler))
+	r.Handle("/Items/{item}/PlaybackInfo", gzip(itemsPlaybackInfoHandler))
+	r.Handle("/MediaSegments/{item}", gzip(mediaSegmentsHandler))
+	r.Handle("/Videos/{item}/stream", gzip(videoStreamHandler))
 
-	r.HandleFunc("/Sessions/Playing", sessionsPlayingHandler).Methods("POST")
-	r.HandleFunc("/Sessions/Playing/Progress", sessionsPlayingHandler).Methods("POST")
+	r.Handle("/Persons", gzip(personsHandler))
 
-	s.PathPrefix("/").Handler(handlers.CompressHandler(r))
+	r.Handle("/Sessions/Playing", gzip(sessionsPlayingHandler)).Methods("POST")
+	r.Handle("/Sessions/Playing/Progress", gzip(sessionsPlayingHandler)).Methods("POST")
 }
 
 const (
@@ -352,29 +353,14 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 		ImageTags: JFImageTags{
 			Primary: "primary_" + i.Id,
 		},
-		// MediaStreams: []JFMediaStreams{
-		// 	{
-		// 		Codec:              "h264",
-		// 		CodecTag:           "avc1",
-		// 		Language:           "eng",
-		// 		TimeBase:           "1/16000",
-		// 		VideoRange:         "SDR",
-		// 		VideoRangeType:     "SDR",
-		// 		AudioSpatialFormat: "None",
-		// 		DisplayTitle:       "720p H264 SDR",
-		// 		IsInterlaced:       false,
-		// 		Height:             546,
-		// 		Width:              1280,
-		// 	},
-		// },
 	}
 
 	// Lazy load NFO
 	if i.Nfo == nil {
 		file, err = os.Open(i.NfoPath)
 		if err == nil {
+			defer file.Close()
 			i.Nfo = decodeNfo(file)
-			file.Close()
 		}
 	}
 
@@ -385,7 +371,7 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 		response.VideoType = "VideoFile"
 		response.Path = "file.mp4"
 		response.Container = "mov,mp4,m4a"
-		response.MediaSources = buildMediaSource(filename, i.Nfo)
+		response.MediaSources = buildMediaSource(filename)
 
 	}
 
@@ -393,8 +379,8 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 		response.Type = "Series"
 		response.IsFolder = true
 		response.ChildCount = len(i.Seasons)
-		response.MediaSources = nil
-		response.MediaStreams = nil
+		// response.MediaSources = nil
+		// response.MediaStreams = nil
 		// Required to have Infuse load backdrop of episode
 		response.BackdropImageTags = []string{
 			response.ID,
@@ -703,23 +689,18 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 	response.OfficialRating = ""
 	response.CommunityRating = 0
 
-	// Enrich and override metadata from episode nfo, if available, as it is more specific
-	var episodeNfo *Nfo
+	// Enrich and override metadata using episode nfo, if available, as it is more specific
 	nfofile := c.Directory + "/" + episodebasepath + ".nfo"
 	file, err := os.Open(nfofile)
-	if err != nil {
-		return
+	if err == nil {
+		episodeNfo := decodeNfo(file)
+		file.Close()
+		enrichResponseWithNFO(&response, episodeNfo)
 	}
-	episodeNfo = decodeNfo(file)
-	file.Close()
 
-	// response.Name = episodeNfo.Title
-	// response.SortName = fmt.Sprintf("%03s - %04s - %s", episodeNfo.Season, episodeNfo.Episode, episodeNfo.Title)
-	// response.Overview = episodeNfo.Plot
-	response.MediaSources = buildMediaSource(filename, episodeNfo)
+	// Add some generic mediasource to indicate "720p, stereo"
+	response.MediaSources = buildMediaSource(filename)
 
-	// Enrich and override metadata from episode nfo (more specific)
-	enrichResponseWithNFO(&response, episodeNfo)
 	return response, nil
 }
 
@@ -808,13 +789,7 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 	}
 }
 
-// CustomWriter is an io.Writer implementation that stores all written strings.
-type CustomWriter struct {
-	mu    *sync.Mutex
-	store []byte
-}
-
-func buildMediaSource(filename string, episodeNfo *Nfo) (mediasources []JFMediaSources) {
+func buildMediaSource(filename string) (mediasources []JFMediaSources) {
 	// todo: this should be replaced with actual mp4 file detail gathering
 	basename := filepath.Base(filename)
 	mediasources = []JFMediaSources{
