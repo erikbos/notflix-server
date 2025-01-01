@@ -23,7 +23,7 @@ import (
 // API definitions: https://swagger.emby.media/ & https://api.jellyfin.org/
 // Docs: https://github.com/mediabrowser/emby/wiki
 
-func addJellyfinHandlers(s *mux.Router) {
+func registerJellyfinHandlers(s *mux.Router) {
 	r := s.UseEncodedPath()
 
 	gzip := func(handler http.HandlerFunc) http.Handler {
@@ -94,7 +94,7 @@ var loggedInUser = JFUser{
 func systemInfoHandler(w http.ResponseWriter, r *http.Request) {
 	response := JFSystemInfoResponse{
 		Id:           serverID,
-		LocalAddress: "http://192.168.1.223:9090",
+		LocalAddress: "http://localhost:9090",
 		// Jellyfin native client checks for exact productname :facepalm:
 		// https://github.com/jellyfin/jellyfin-expo/blob/7dedbc72fb53fc4b83c3967c9a8c6c071916425b/utils/ServerValidator.js#L82C49-L82C64
 		ProductName: "Jellyfin Server",
@@ -274,7 +274,7 @@ func usersItemHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Item not found", http.StatusNotFound)
 		return
 	}
-	serveJSON(buildJFItem(c, i), w)
+	serveJSON(buildJFItem(c, i, false), w)
 }
 
 func buildJFItemCollection(itemid string) (response JFItem, e error) {
@@ -326,7 +326,7 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 }
 
 // buildJFItem builds movie or show from db
-func buildJFItem(c *Collection, i *Item) (response JFItem) {
+func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
 	// fixme: this stats() either show directory or video file, hmm
 	filename := c.Directory + "/" + i.Name + "/" + i.Video
 	file, err := os.Open(filename)
@@ -340,19 +340,16 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 	}
 
 	response = JFItem{
+		ID:                      i.Id,
+		ParentID:                idHash(c.Name_),
+		ServerID:                serverID,
 		Name:                    i.Name,
 		OriginalTitle:           i.Name,
 		SortName:                i.Name,
 		ForcedSortName:          i.Name,
-		ServerID:                serverID,
-		ParentID:                idHash(c.Name_),
-		ID:                      i.Id,
 		Etag:                    idHash(i.Id),
 		DateCreated:             fileStat.ModTime().UTC().Format("2001-01-01T00:00:00.0000000Z"),
 		PrimaryImageAspectRatio: 0.6666666666666666,
-		ImageTags: JFImageTags{
-			Primary: "primary_" + i.Id,
-		},
 	}
 
 	// Lazy load NFO
@@ -364,27 +361,41 @@ func buildJFItem(c *Collection, i *Item) (response JFItem) {
 		}
 	}
 
+	response.ImageTags = &JFImageTags{
+		Primary: "primary_" + i.Id,
+	}
+	// Required to have Infuse load backdrop of episode
+	response.BackdropImageTags = []string{
+		response.ID,
+	}
+
 	if c.Type == "movies" {
 		response.Type = "Movie"
 		response.IsFolder = false
 		response.LocationType = "FileSystem"
+		response.MediaType = "Video"
 		response.VideoType = "VideoFile"
 		response.Path = "file.mp4"
 		response.Container = "mov,mp4,m4a"
 		response.MediaSources = buildMediaSource(filename)
-
+		// listview = true, movie carousel return both primary and BackdropImageTags
+		// non-listview = false, remove primary (thumbnail) image reference
+		if !listView {
+			response.ImageTags = nil
+		}
 	}
 
 	if c.Type == "shows" {
 		response.Type = "Series"
 		response.IsFolder = true
 		response.ChildCount = len(i.Seasons)
-		// response.MediaSources = nil
-		// response.MediaStreams = nil
-		// Required to have Infuse load backdrop of episode
-		response.BackdropImageTags = []string{
-			response.ID,
-		}
+		// response.ImageTags = &JFImageTags{
+		// 	Primary: "primary_" + i.Id,
+		// }
+		// // Required to have Infuse load backdrop of episode
+		// response.BackdropImageTags = []string{
+		// 	response.ID,
+		// }
 	}
 
 	enrichResponseWithNFO(&response, i.Nfo)
@@ -490,7 +501,7 @@ func usersItemsHandler(w http.ResponseWriter, r *http.Request) {
 	// Create API response
 	responseItems := []JFItem{}
 	for _, i := range items {
-		responseItems = append(responseItems, buildJFItem(c, i))
+		responseItems = append(responseItems, buildJFItem(c, i, true))
 	}
 	response := UserItemsResponse{
 		Items: responseItems,
@@ -507,8 +518,8 @@ func usersItemsLatestHandler(w http.ResponseWriter, r *http.Request) {
 	c1, i1 := getItemByID("rVFG3EzPthk2wowNkqUl")
 	c2, i2 := getItemByID("q2e2UzCOd9zkmJenIOph")
 	items := []JFItem{
-		buildJFItem(c1, i1),
-		buildJFItem(c2, i2),
+		buildJFItem(c1, i1, true),
+		buildJFItem(c2, i2, true),
 	}
 	serveJSON(items, w)
 }
@@ -545,7 +556,7 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Show not found", http.StatusNotFound)
 		return
 	}
-	showItem := buildJFItem(c, i)
+	showItem := buildJFItem(c, i, true)
 
 	// Create API response
 	seasons := []JFItem{}
@@ -567,9 +578,8 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 			MediaType:          "Unknown",
 			ChildCount:         len(s.Episodes),
 			RecursiveItemCount: len(s.Episodes),
-			ImageTags: JFImageTags{
+			ImageTags: &JFImageTags{
 				Primary: "season",
-				// Backdrop: "season2",
 			},
 			DateCreated:    "2022-01-01T00:00:00.0000000Z",
 			PremiereDate:   "2022-01-01T00:00:00.0000000Z",
@@ -597,7 +607,7 @@ func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Show not found", http.StatusNotFound)
 		return
 	}
-	showItem := buildJFItem(c, i)
+	showItem := buildJFItem(c, i, false)
 
 	// For which season do we need to produce list of shows?
 	queryparams := r.URL.Query()
@@ -674,7 +684,7 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 		VideoType:    "VideoFile",
 		Container:    "mov,mp4,m4a",
 		HasSubtitles: true,
-		ImageTags: JFImageTags{
+		ImageTags: &JFImageTags{
 			Primary: "episode",
 		},
 		DateCreated: "2023-01-01T00:00:00.0000000Z",
@@ -711,12 +721,13 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 
 	response.Name = n.Title
 	response.Overview = n.Plot
-	response.Taglines = []string{n.Tagline}
+	if n.Tagline != "" {
+		response.Taglines = []string{n.Tagline}
+	}
 
 	// Handle episode naming & numbering
-	response.SeasonName = "Season " + n.Season
-
 	if n.Season != "" {
+		response.SeasonName = "Season " + n.Season
 		response.ParentIndexNumber, _ = strconv.Atoi(n.Season)
 	}
 	if n.Episode != "" {
@@ -893,7 +904,7 @@ func showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
 	c, i := getItemByID("rVFG3EzPthk2wowNkqUl")
 	response := JFShowsNextUpResponse{
 		Items: []JFItem{
-			buildJFItem(c, i),
+			buildJFItem(c, i, true),
 		},
 		TotalRecordCount: 1,
 		StartIndex:       0,
@@ -953,6 +964,8 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"poster.jpg")
 		return
 	case "Backdrop":
+		// fixme: some formats use <basepath-including-filename>-fanart.jpg
+		// should check for presence of such file?
 		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"fanart.jpg")
 		return
 		// We do not have artwork on disk for logo requests
@@ -973,7 +986,7 @@ func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Item not found", http.StatusNotFound)
 		return
 	}
-	item := buildJFItem(c, i)
+	item := buildJFItem(c, i, true)
 
 	response := JFUsersPlaybackInfoResponse{
 		MediaSources:  item.MediaSources,

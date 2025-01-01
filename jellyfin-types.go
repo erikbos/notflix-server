@@ -219,7 +219,7 @@ type JFItem struct {
 	PrimaryImageAspectRatio float64            `json:"PrimaryImageAspectRatio,omitempty"`
 	MediaStreams            []JFMediaStreams   `json:"MediaStreams,omitempty"`
 	VideoType               string             `json:"VideoType,omitempty"`
-	ImageTags               JFImageTags        `json:"ImageTags,omitempty"`
+	ImageTags               *JFImageTags       `json:"ImageTags,omitempty"`
 	BackdropImageTags       []string           `json:"BackdropImageTags,omitempty"`
 	ImageBlurHashes         *JFImageBlurHashes `json:"ImageBlurHashes,omitempty"`
 	Chapters                []string           `json:"Chapters,omitempty"`
@@ -380,9 +380,10 @@ type JFUserData struct {
 }
 
 type JFImageTags struct {
-	Primary string `json:"Primary,omitempty"`
-	Logo    string `json:"Logo,omitempty"`
-	Thumb   string `json:"Thumb,omitempty"`
+	Primary  string `json:"Primary,omitempty"`
+	Backdrop string `json:"Backdrop,omitempty"`
+	Logo     string `json:"Logo,omitempty"`
+	Thumb    string `json:"Thumb,omitempty"`
 }
 
 type UserItemsResponse struct {

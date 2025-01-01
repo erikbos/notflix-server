@@ -171,7 +171,7 @@ func main() {
 	r.Handle("/v", notFound)
 	r.PathPrefix("/v/").HandlerFunc(indexHandler)
 
-	addJellyfinHandlers(r)
+	registerJellyfinHandlers(r)
 
 	r.PathPrefix("/").Handler(http.FileServer(http.Dir(config.Appdir)))
 
