@@ -179,13 +179,13 @@ type JFItem struct {
 	ServerID                 string             `json:"ServerId"`
 	ID                       string             `json:"Id"`
 	Etag                     string             `json:"Etag"`
-	DateCreated              string             `json:"DateCreated,omitempty"`
+	DateCreated              time.Time          `json:"DateCreated,omitempty"`
 	CanDelete                bool               `json:"CanDelete,omitempty"`
 	CanDownload              bool               `json:"CanDownload,omitempty"`
 	Container                string             `json:"Container,omitempty"`
 	SortName                 string             `json:"SortName,omitempty"`
 	ForcedSortName           string             `json:"ForcedSortName,omitempty"`
-	PremiereDate             string             `json:"PremiereDate,omitempty"`
+	PremiereDate             time.Time          `json:"PremiereDate,omitempty"`
 	ExternalUrls             []JFExternalUrls   `json:"ExternalUrls,omitempty"`
 	MediaSources             []JFMediaSources   `json:"MediaSources,omitempty"`
 	CriticRating             int                `json:"CriticRating,omitempty"`

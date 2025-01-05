@@ -171,8 +171,8 @@ func usersViewsHandler(w http.ResponseWriter, r *http.Request) {
 			ParentID:                 collectionRootID,
 			Type:                     "CollectionFolder",
 			IsFolder:                 true,
-			DateCreated:              "2020-01-01T00:00:00.0000000Z",
-			PremiereDate:             "2020-01-01T00:00:00.0000000Z",
+			DateCreated:              time.Now().UTC(),
+			PremiereDate:             time.Now().UTC(),
 			Name:                     c.Name_,
 			SortName:                 c.Name_,
 			ID:                       itemID,
@@ -296,7 +296,7 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 		ServerID:                 serverID,
 		ID:                       itemID,
 		Etag:                     idHash(itemID),
-		DateCreated:              "2020-01-01T00:00:00.0000000Z",
+		DateCreated:              time.Now().UTC(),
 		Type:                     "CollectionFolder",
 		IsFolder:                 true,
 		EnableMediaSourceDisplay: true,
@@ -348,7 +348,7 @@ func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
 		SortName:                i.Name,
 		ForcedSortName:          i.Name,
 		Etag:                    idHash(i.Id),
-		DateCreated:             fileStat.ModTime().UTC().Format("2001-01-01T00:00:00.0000000Z"),
+		DateCreated:             fileStat.ModTime().UTC(),
 		PrimaryImageAspectRatio: 0.6666666666666666,
 	}
 
@@ -389,13 +389,6 @@ func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
 		response.Type = "Series"
 		response.IsFolder = true
 		response.ChildCount = len(i.Seasons)
-		// response.ImageTags = &JFImageTags{
-		// 	Primary: "primary_" + i.Id,
-		// }
-		// // Required to have Infuse load backdrop of episode
-		// response.BackdropImageTags = []string{
-		// 	response.ID,
-		// }
 	}
 
 	enrichResponseWithNFO(&response, i.Nfo)
@@ -578,12 +571,11 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 			MediaType:          "Unknown",
 			ChildCount:         len(s.Episodes),
 			RecursiveItemCount: len(s.Episodes),
+			DateCreated:        time.Now().UTC(),
+			PremiereDate:       time.Now().UTC(),
 			ImageTags: &JFImageTags{
 				Primary: "season",
 			},
-			DateCreated:    "2022-01-01T00:00:00.0000000Z",
-			PremiereDate:   "2022-01-01T00:00:00.0000000Z",
-			ProductionYear: 2022,
 		}
 		// season.UserData.LastPlayedDate = time.Now().UTC()
 
@@ -598,7 +590,7 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // curl -v 'http://127.0.0.1:9090/Shows/rXlq4EHNxq4HIVQzw3o2/Episodes?UserId=2b1ec0a52b09456c9823a367d84ac9e5&ExcludeLocationTypes=Virtual&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&SeasonId=rXlq4EHNxq4HIVQzw3o2/1'
-// generate show overview for one season
+// generate episode overview for one season of a show
 func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	showId := vars["show"]
@@ -684,10 +676,11 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 		VideoType:    "VideoFile",
 		Container:    "mov,mp4,m4a",
 		HasSubtitles: true,
+		DateCreated:  time.Now().UTC(),
+		PremiereDate: time.Now().UTC(),
 		ImageTags: &JFImageTags{
 			Primary: "episode",
 		},
-		DateCreated: "2023-01-01T00:00:00.0000000Z",
 	}
 
 	// Get a bunch of metadata from series-level nfo
@@ -790,13 +783,15 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 		response.ProductionYear = n.Year
 	}
 
-	switch len(n.Premiered) {
-	case 0:
-		break
-	case 10:
-		response.PremiereDate = n.Premiered + "T00:00:00.0000000Z"
-	default:
-		log.Printf("unknown date format info %s", n.Premiered)
+	if n.Premiered != "" {
+		if parsedTime, err := parseTime(n.Premiered); err == nil {
+			response.PremiereDate = parsedTime
+		}
+	}
+	if n.Aired != "" {
+		if parsedTime, err := parseTime(n.Aired); err == nil {
+			response.PremiereDate = parsedTime
+		}
 	}
 }
 
@@ -1106,11 +1101,32 @@ func getEpisodeIDDetails(episodeid string) (showid, episodebasepath string, err 
 	return
 }
 
-func getItemByID(showId string) (c *Collection, i *Item) {
+func getItemByID(itemId string) (c *Collection, i *Item) {
 	for _, c := range config.Collections {
-		if i = getItem(c.Name_, showId); i != nil {
+		if i = getItem(c.Name_, itemId); i != nil {
 			return &c, i
 		}
 	}
 	return nil, nil
+}
+
+func parseTime(input string) (parsedTime time.Time, err error) {
+	timeFormats := []string{
+		"15:04:05",
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+		"02 Jan 2006",
+		"02 Jan 2006 15:04:05",
+		time.ANSIC,    // ctime format
+		time.UnixDate, // Unix date format
+	}
+
+	// Try each format until one succeeds
+	for _, format := range timeFormats {
+		if parsedTime, err = time.Parse(format, input); err == nil {
+			log.Printf("Parsed: %s as %v\n", input, parsedTime)
+			return
+		}
+	}
+	return
 }
