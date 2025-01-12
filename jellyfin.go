@@ -7,10 +7,8 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +68,7 @@ const (
 	// itemid prefixes
 	itemprefix_collection = "collection_"
 	itemprefix_show       = "show_"
+	itemprefix_season     = "season_"
 	itemprefix_episode    = "episode_"
 
 	// imagetag prefix will get HTTP-redirected
@@ -239,33 +238,39 @@ func usersItemHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	itemId := vars["item"]
 
-	// Is collection?
-	if strings.HasPrefix(itemId, itemprefix_collection) {
-		collectionItem, err := buildJFItemCollection(itemId)
-		if err != nil {
-			http.Error(w, "Could not find collection", http.StatusNotFound)
+	splitted := strings.Split(itemId, "_")
+	if len(splitted) == 2 {
+		switch splitted[0] {
+		case "collection":
+			collectionItem, err := buildJFItemCollection(itemId)
+			if err != nil {
+				http.Error(w, "Could not find collection", http.StatusNotFound)
+				return
+
+			}
+			serveJSON(collectionItem, w)
 			return
-
-		}
-		serveJSON(collectionItem, w)
-		return
-	}
-
-	// Is episode?
-	if strings.HasPrefix(itemId, itemprefix_episode) {
-		episodeItem, err := buildJFItemEpisode(itemId)
-		if err != nil {
-			http.Error(w, "Could not find episode", http.StatusNotFound)
+		case "season":
+			seasonItem, err := buildJFItemSeason(itemId)
+			if err != nil {
+				http.Error(w, "Could not find season", http.StatusNotFound)
+				return
+			}
+			serveJSON(seasonItem, w)
+			return
+		case "episode":
+			episodeItem, err := buildJFItemEpisode(itemId)
+			if err != nil {
+				http.Error(w, "Could not find episode", http.StatusNotFound)
+				return
+			}
+			serveJSON(episodeItem, w)
+			return
+		default:
+			log.Print("Item request for unknown prefix!")
+			http.Error(w, "Unknown item prefix", http.StatusInternalServerError)
 			return
 		}
-		serveJSON(episodeItem, w)
-		return
-	}
-
-	if strings.Contains(itemId, "_") {
-		log.Print("Item request for unknown prefix!")
-		http.Error(w, "Unknown item type", http.StatusInternalServerError)
-		return
 	}
 
 	// Try to find individual item
@@ -306,8 +311,8 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 		PlayAccess:               "Full",
 		PrimaryImageAspectRatio:  1.7777777777777777,
 		RemoteTrailers:           []JFRemoteTrailers{},
-		Path:                     "/collection",
 		LocationType:             "FileSystem",
+		Path:                     "/collection",
 		LockData:                 false,
 		MediaType:                "Unknown",
 		ParentID:                 "e9d5075a555c1cbc394eec4cef295274",
@@ -327,18 +332,6 @@ func buildJFItemCollection(itemid string) (response JFItem, e error) {
 
 // buildJFItem builds movie or show from db
 func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
-	// fixme: this stats() either show directory or video file, hmm
-	filename := c.Directory + "/" + i.Name + "/" + i.Video
-	file, err := os.Open(filename)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	fileStat, err := file.Stat()
-	if err != nil {
-		return
-	}
-
 	response = JFItem{
 		ID:                      i.Id,
 		ParentID:                idHash(c.Name_),
@@ -348,13 +341,14 @@ func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
 		SortName:                i.Name,
 		ForcedSortName:          i.Name,
 		Etag:                    idHash(i.Id),
-		DateCreated:             fileStat.ModTime().UTC(),
+		DateCreated:             time.Unix(i.FirstVideo/1000, 0).UTC(),
+		PremiereDate:            time.Unix(i.FirstVideo/1000, 0).UTC(),
 		PrimaryImageAspectRatio: 0.6666666666666666,
 	}
 
-	// Lazy load NFO
+	// Lazy load & handle NFO
 	if i.Nfo == nil {
-		file, err = os.Open(i.NfoPath)
+		file, err := os.Open(i.NfoPath)
 		if err == nil {
 			defer file.Close()
 			i.Nfo = decodeNfo(file)
@@ -370,12 +364,14 @@ func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
 	}
 
 	if c.Type == "movies" {
+		filename := c.Directory + "/" + i.Name + "/" + i.Video
+
 		response.Type = "Movie"
 		response.IsFolder = false
 		response.LocationType = "FileSystem"
+		response.Path = "file.mp4"
 		response.MediaType = "Video"
 		response.VideoType = "VideoFile"
-		response.Path = "file.mp4"
 		response.Container = "mov,mp4,m4a"
 		response.MediaSources = buildMediaSource(filename)
 		// listview = true, movie carousel return both primary and BackdropImageTags
@@ -544,41 +540,19 @@ func libraryVirtualFoldersHandler(w http.ResponseWriter, r *http.Request) {
 func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	showId := vars["show"]
-	c, i := getItemByID(showId)
+	_, i := getItemByID(showId)
 	if i == nil {
 		http.Error(w, "Show not found", http.StatusNotFound)
 		return
 	}
-	showItem := buildJFItem(c, i, true)
-
 	// Create API response
 	seasons := []JFItem{}
 	for _, s := range i.Seasons {
-		seasonId := showItem.ID + "/" + fmt.Sprintf("%d", s.SeasonNo)
-		season := JFItem{
-			Type:               "Season",
-			ServerID:           serverID,
-			ParentID:           showId,
-			SeriesID:           showId,
-			ID:                 seasonId,
-			Etag:               idHash(seasonId),
-			SeriesName:         showItem.Name,
-			IndexNumber:        s.SeasonNo,
-			Name:               fmt.Sprintf("Season %d", s.SeasonNo),
-			SortName:           fmt.Sprintf("%04d", s.SeasonNo),
-			IsFolder:           true,
-			LocationType:       "FileSystem",
-			MediaType:          "Unknown",
-			ChildCount:         len(s.Episodes),
-			RecursiveItemCount: len(s.Episodes),
-			DateCreated:        time.Now().UTC(),
-			PremiereDate:       time.Now().UTC(),
-			ImageTags: &JFImageTags{
-				Primary: "season",
-			},
+		season, err := buildJFItemSeason(s.Id)
+		if err != nil {
+			log.Printf("buildJFItemSeason returned error %s", err)
+			continue
 		}
-		// season.UserData.LastPlayedDate = time.Now().UTC()
-
 		seasons = append(seasons, season)
 	}
 	response := UserItemsResponse{
@@ -589,48 +563,62 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(response, w)
 }
 
+// buildJFItemSeason builds season
+func buildJFItemSeason(seasonid string) (response JFItem, err error) {
+	_, show, season := getSeasonByID(seasonid)
+	if season == nil {
+		err = errors.New("could not find season")
+		return
+	}
+
+	// seasonId := show.ID + "/" + fmt.Sprintf("%d", s.SeasonNo)
+	response = JFItem{
+		Type:               "Season",
+		ServerID:           serverID,
+		ParentID:           show.Id,
+		SeriesID:           show.Id,
+		ID:                 itemprefix_season + seasonid,
+		Etag:               idHash(seasonid),
+		SeriesName:         show.Name,
+		IndexNumber:        season.SeasonNo,
+		Name:               fmt.Sprintf("Season %d", season.SeasonNo),
+		SortName:           fmt.Sprintf("%04d", season.SeasonNo),
+		IsFolder:           true,
+		LocationType:       "FileSystem",
+		MediaType:          "Unknown",
+		ChildCount:         len(season.Episodes),
+		RecursiveItemCount: len(season.Episodes),
+		DateCreated:        time.Now().UTC(),
+		PremiereDate:       time.Now().UTC(),
+		ImageTags: &JFImageTags{
+			Primary: "season",
+		},
+	}
+	return response, nil
+}
+
 // curl -v 'http://127.0.0.1:9090/Shows/rXlq4EHNxq4HIVQzw3o2/Episodes?UserId=2b1ec0a52b09456c9823a367d84ac9e5&ExcludeLocationTypes=Virtual&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&SeasonId=rXlq4EHNxq4HIVQzw3o2/1'
 // generate episode overview for one season of a show
 func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	showId := vars["show"]
-	c, i := getItemByID(showId)
+	_, i := getItemByID(vars["show"])
 	if i == nil {
 		http.Error(w, "Show not found", http.StatusNotFound)
 		return
 	}
-	showItem := buildJFItem(c, i, false)
 
-	// For which season do we need to produce list of shows?
-	queryparams := r.URL.Query()
-	seasonId := queryparams.Get("SeasonId")
-	if seasonId == "" {
-		http.Error(w, "SeasonID not provided", http.StatusNotFound)
-		return
-	}
-	var requestedSeasonId string
-	var requestedSeason int
-	seasonIdParts := strings.Split(seasonId, "/")
-	if len(seasonIdParts) == 2 {
-		requestedSeasonId = seasonIdParts[0]
-		requestedSeason, _ = strconv.Atoi(seasonIdParts[1])
-
-		if requestedSeasonId != showItem.ID {
-			http.Error(w, "Requested session does not belong to series", http.StatusNotFound)
-			return
-		}
-	}
+	// Do we need to filter down overview by a particular season?
+	RequestedSeasonId := r.URL.Query().Get("SeasonId")
 
 	// Create API response for requested season
 	episodes := []JFItem{}
 	for _, s := range i.Seasons {
-		// log.Printf("Found season: %d, requested: %d\n", s.SeasonNo, requestedSeason)
-		if s.SeasonNo != requestedSeason {
+		// Limit results to a season if id provided
+		if RequestedSeasonId != "" && itemprefix_season+s.Id != RequestedSeasonId {
 			continue
 		}
-		// log.Printf("Building season %d overview\n", s.SeasonNo)
 		for _, e := range s.Episodes {
-			episodeId := itemprefix_episode + url.QueryEscape(fmt.Sprintf("%s_%s/S%02d/%s", showId, i.Name, s.SeasonNo, e.BaseName))
+			episodeId := itemprefix_episode + e.Id
 			episode, err := buildJFItemEpisode(episodeId)
 			if err != nil {
 				log.Printf("buildJFItemEpisode returned error %s", err)
@@ -647,45 +635,40 @@ func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(response, w)
 }
 
-// buildJFItemEpisode builds tv episode
-func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
-	showId, episodebasepath, err := getEpisodeIDDetails(episodeid)
-	if err != nil {
-		e = errors.New("could not parse episodeid")
+// buildJFItemEpisode builds episode
+func buildJFItemEpisode(episodeid string) (response JFItem, err error) {
+	_, show, _, episode := getEpisodeByID(episodeid)
+	if episode == nil {
+		err = errors.New("could not find episode")
 		return
 	}
 
-	c, showItem := getItemByID(showId)
-	if showItem == nil {
-		e = errors.New("could not find showid")
-		return
-	}
-
-	filename := c.Directory + "/" + episodebasepath + ".mp4"
 	response = JFItem{
 		Type:         "Episode",
 		ID:           episodeid,
 		Etag:         idHash(episodeid),
 		ServerID:     serverID,
-		Path:         "episode.mp4",
-		SeriesName:   showItem.Name,
-		SeriesID:     idHash(showItem.Name),
+		SeriesName:   show.Name,
+		SeriesID:     idHash(show.Name),
 		LocationType: "FileSystem",
+		Path:         "episode.mp4",
 		IsFolder:     false,
 		MediaType:    "Video",
 		VideoType:    "VideoFile",
 		Container:    "mov,mp4,m4a",
 		HasSubtitles: true,
-		DateCreated:  time.Now().UTC(),
-		PremiereDate: time.Now().UTC(),
+		DateCreated:  time.Unix(episode.VideoTS/1000, 0).UTC(),
+		PremiereDate: time.Unix(episode.VideoTS/1000, 0).UTC(),
 		ImageTags: &JFImageTags{
 			Primary: "episode",
 		},
 	}
 
+	log.Printf("episode timestamp: %d, %v+\n", episode.VideoTS, response.DateCreated)
+
 	// Get a bunch of metadata from series-level nfo
-	if showItem.Nfo != nil {
-		enrichResponseWithNFO(&response, showItem.Nfo)
+	if show.Nfo != nil {
+		enrichResponseWithNFO(&response, show.Nfo)
 	}
 
 	// Remove ratings as we do not want ratings from series apply to an episode
@@ -693,8 +676,7 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 	response.CommunityRating = 0
 
 	// Enrich and override metadata using episode nfo, if available, as it is more specific
-	nfofile := c.Directory + "/" + episodebasepath + ".nfo"
-	file, err := os.Open(nfofile)
+	file, err := os.Open(episode.NfoPath)
 	if err == nil {
 		episodeNfo := decodeNfo(file)
 		file.Close()
@@ -702,7 +684,7 @@ func buildJFItemEpisode(episodeid string) (response JFItem, e error) {
 	}
 
 	// Add some generic mediasource to indicate "720p, stereo"
-	response.MediaSources = buildMediaSource(filename)
+	response.MediaSources = buildMediaSource(episode.Video)
 
 	return response, nil
 }
@@ -930,21 +912,12 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	itemId := vars["item"]
 	if strings.HasPrefix(itemId, itemprefix_episode) {
-		showId, episodebasepath, err := getEpisodeIDDetails(itemId)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+		c, item, _, episode := getEpisodeByID(itemId)
+		if episode == nil {
+			http.Error(w, "Item not found (could not find episode)", http.StatusNotFound)
 			return
 		}
-		// log.Printf("\n\n0: %s\n1: %s\n2: %s\n\n", tag, showId, episodebasepath)
-		c, showItem := getItemByID(showId)
-		if showItem == nil {
-			http.Error(w, "Item not found (could not find show)", http.StatusNotFound)
-			return
-		}
-		filename := c.Directory + "/" + episodebasepath + "-thumb.jpg"
-
-		// log.Printf("FILENAME %s\n", filename)
-		serveFile(w, r, filename)
+		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Thumb)
 		return
 	}
 
@@ -973,18 +946,18 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 
 // curl -v 'http://127.0.0.1:9090/Items/68d73f6f48efedb7db697bf9fee580cb/PlaybackInfo?UserId=2b1ec0a52b09456c9823a367d84ac9e5'
 func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	itemId := vars["item"]
+	// vars := mux.Vars(r)
+	// itemId := vars["item"]
 
-	c, i := getItemByID(itemId)
-	if i == nil || i.Video == "" {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
-	}
-	item := buildJFItem(c, i, true)
+	// c, i := getItemByID(itemId)
+	// if i == nil || i.Video == "" {
+	// 	http.Error(w, "Item not found", http.StatusNotFound)
+	// 	return
+	// }
+	// item := buildJFItem(c, i, true)
 
 	response := JFUsersPlaybackInfoResponse{
-		MediaSources:  item.MediaSources,
+		MediaSources:  buildMediaSource("test.mp4"),
 		PlaySessionID: "fc3b27127bf84ed89a300c6285d697e2",
 	}
 	serveJSON(response, w)
@@ -1008,19 +981,12 @@ func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Is episode?
 	if strings.HasPrefix(itemId, itemprefix_episode) {
-		showId, episodebasepath, err := getEpisodeIDDetails(itemId)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+		c, item, _, episode := getEpisodeByID(itemId)
+		if episode == nil {
+			http.Error(w, "Could not find episode", http.StatusNotFound)
 			return
 		}
-		c, showItem := getItemByID(showId)
-		if showItem == nil {
-			http.Error(w, "Could not find show", http.StatusNotFound)
-			return
-		}
-
-		filename := c.Directory + "/" + episodebasepath + ".mp4"
-		serveFile(w, r, filename)
+		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Video)
 		return
 	}
 
@@ -1084,23 +1050,6 @@ func getCollectionID(input string) (id string, err error) {
 	return
 }
 
-func getEpisodeIDDetails(episodeid string) (showid, episodebasepath string, err error) {
-	if !strings.HasPrefix(episodeid, itemprefix_episode) {
-		err = errors.New("not an episodeid")
-		return
-	}
-	episode_details, _ := url.QueryUnescape(strings.TrimPrefix(episodeid, itemprefix_episode))
-	re := regexp.MustCompile(`([0-9A-Za-z]+)_(.+)`)
-	matches := re.FindStringSubmatch(episode_details)
-	if len(matches) != 3 {
-		err = errors.New("Item not found (could not find episode)")
-		return
-	}
-	showid = matches[1]
-	episodebasepath = matches[2]
-	return
-}
-
 func getItemByID(itemId string) (c *Collection, i *Item) {
 	for _, c := range config.Collections {
 		if i = getItem(c.Name_, itemId); i != nil {
@@ -1108,6 +1057,41 @@ func getItemByID(itemId string) (c *Collection, i *Item) {
 		}
 	}
 	return nil, nil
+}
+
+func getSeasonByID(saesonId string) (*Collection, *Item, *Season) {
+	saesonId = strings.TrimPrefix(saesonId, itemprefix_season)
+
+	// fixme: wooho O(n^^3) "just temporarily.."
+	for _, c := range config.Collections {
+		for _, i := range c.Items {
+			for _, s := range i.Seasons {
+				if s.Id == saesonId {
+					return &c, i, &s
+				}
+			}
+		}
+	}
+	return nil, nil, nil
+}
+
+func getEpisodeByID(episodeId string) (*Collection, *Item, *Season, *Episode) {
+	episodeId = strings.TrimPrefix(episodeId, itemprefix_episode)
+
+	// fixme: wooho O(n^^4) "just temporarily.."
+	for _, c := range config.Collections {
+		for _, i := range c.Items {
+			for _, s := range i.Seasons {
+				for _, e := range s.Episodes {
+					if e.Id == episodeId {
+						return &c, i, &s, &e
+					}
+
+				}
+			}
+		}
+	}
+	return nil, nil, nil, nil
 }
 
 func parseTime(input string) (parsedTime time.Time, err error) {
@@ -1124,7 +1108,7 @@ func parseTime(input string) (parsedTime time.Time, err error) {
 	// Try each format until one succeeds
 	for _, format := range timeFormats {
 		if parsedTime, err = time.Parse(format, input); err == nil {
-			log.Printf("Parsed: %s as %v\n", input, parsedTime)
+			// log.Printf("Parsed: %s as %v\n", input, parsedTime)
 			return
 		}
 	}
