@@ -1,14 +1,10 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -282,116 +278,6 @@ func usersItemHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(buildJFItem(c, i, false), w)
 }
 
-func buildJFItemCollection(itemid string) (response JFItem, e error) {
-	if !strings.HasPrefix(itemid, itemprefix_collection) {
-		e = errors.New("malformed collection id")
-		return
-	}
-
-	collectionid := strings.TrimPrefix(itemid, itemprefix_collection)
-	c := getCollection(collectionid)
-	if c == nil {
-		e = errors.New("collection not found")
-		return
-	}
-
-	itemID := genCollectionID(c.SourceId)
-	response = JFItem{
-		Name:                     c.Name_,
-		ServerID:                 serverID,
-		ID:                       itemID,
-		Etag:                     idHash(itemID),
-		DateCreated:              time.Now().UTC(),
-		Type:                     "CollectionFolder",
-		IsFolder:                 true,
-		EnableMediaSourceDisplay: true,
-		ChildCount:               len(c.Items),
-		DisplayPreferencesID:     displayPreferencesID,
-		ExternalUrls:             []JFExternalUrls{},
-		PlayAccess:               "Full",
-		PrimaryImageAspectRatio:  1.7777777777777777,
-		RemoteTrailers:           []JFRemoteTrailers{},
-		LocationType:             "FileSystem",
-		Path:                     "/collection",
-		LockData:                 false,
-		MediaType:                "Unknown",
-		ParentID:                 "e9d5075a555c1cbc394eec4cef295274",
-		CanDelete:                false,
-		CanDownload:              false,
-		SpecialFeatureCount:      0,
-	}
-	switch c.Type {
-	case "movies":
-		response.CollectionType = collectionTypeMovies
-	case "shows":
-		response.CollectionType = collectionTypeTVShows
-	}
-	response.SortName = response.CollectionType
-	return
-}
-
-// buildJFItem builds movie or show from db
-func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
-	response = JFItem{
-		ID:                      i.Id,
-		ParentID:                idHash(c.Name_),
-		ServerID:                serverID,
-		Name:                    i.Name,
-		OriginalTitle:           i.Name,
-		SortName:                i.Name,
-		ForcedSortName:          i.Name,
-		Etag:                    idHash(i.Id),
-		DateCreated:             time.Unix(i.FirstVideo/1000, 0).UTC(),
-		PremiereDate:            time.Unix(i.FirstVideo/1000, 0).UTC(),
-		PrimaryImageAspectRatio: 0.6666666666666666,
-	}
-
-	// Lazy load & handle NFO
-	if i.Nfo == nil {
-		file, err := os.Open(i.NfoPath)
-		if err == nil {
-			defer file.Close()
-			i.Nfo = decodeNfo(file)
-		}
-	}
-
-	response.ImageTags = &JFImageTags{
-		Primary: "primary_" + i.Id,
-	}
-	// Required to have Infuse load backdrop of episode
-	response.BackdropImageTags = []string{
-		response.ID,
-	}
-
-	if c.Type == "movies" {
-		filename := c.Directory + "/" + i.Name + "/" + i.Video
-
-		response.Type = "Movie"
-		response.IsFolder = false
-		response.LocationType = "FileSystem"
-		response.Path = "file.mp4"
-		response.MediaType = "Video"
-		response.VideoType = "VideoFile"
-		response.Container = "mov,mp4,m4a"
-		response.MediaSources = buildMediaSource(filename)
-		// listview = true, movie carousel return both primary and BackdropImageTags
-		// non-listview = false, remove primary (thumbnail) image reference
-		if !listView {
-			response.ImageTags = nil
-		}
-	}
-
-	if c.Type == "shows" {
-		response.Type = "Series"
-		response.IsFolder = true
-		response.ChildCount = len(i.Seasons)
-	}
-
-	enrichResponseWithNFO(&response, i.Nfo)
-
-	return response
-}
-
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items?ExcludeLocationTypes=Virtual&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&ParentId=f137a2dd21bbc1b99aa5c0f6bf02a805&SortBy=SortName,ProductionYear&SortOrder=Ascending&IncludeItemTypes=Movie&Recursive=true&StartIndex=0&Limit=50'
 // find based upon title
 // curl -v 'http://127.0.0.1:9090/Users/2b1ec0a52b09456c9823a367d84ac9e5/Items?ExcludeLocationTypes=Virtual&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&SearchTerm=p&Recursive=true&Limit=24
@@ -477,7 +363,7 @@ func usersItemsHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Apply pagination (startIndex and limit)
+	// Apply pagination
 	startIndex, _ := strconv.Atoi(queryparams.Get("StartIndex"))
 	limit, _ := strconv.Atoi(queryparams.Get("Limit"))
 	if startIndex >= 0 && startIndex < len(items) {
@@ -563,40 +449,6 @@ func showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(response, w)
 }
 
-// buildJFItemSeason builds season
-func buildJFItemSeason(seasonid string) (response JFItem, err error) {
-	_, show, season := getSeasonByID(seasonid)
-	if season == nil {
-		err = errors.New("could not find season")
-		return
-	}
-
-	// seasonId := show.ID + "/" + fmt.Sprintf("%d", s.SeasonNo)
-	response = JFItem{
-		Type:               "Season",
-		ServerID:           serverID,
-		ParentID:           show.Id,
-		SeriesID:           show.Id,
-		ID:                 itemprefix_season + seasonid,
-		Etag:               idHash(seasonid),
-		SeriesName:         show.Name,
-		IndexNumber:        season.SeasonNo,
-		Name:               fmt.Sprintf("Season %d", season.SeasonNo),
-		SortName:           fmt.Sprintf("%04d", season.SeasonNo),
-		IsFolder:           true,
-		LocationType:       "FileSystem",
-		MediaType:          "Unknown",
-		ChildCount:         len(season.Episodes),
-		RecursiveItemCount: len(season.Episodes),
-		DateCreated:        time.Now().UTC(),
-		PremiereDate:       time.Now().UTC(),
-		ImageTags: &JFImageTags{
-			Primary: "season",
-		},
-	}
-	return response, nil
-}
-
 // curl -v 'http://127.0.0.1:9090/Shows/rXlq4EHNxq4HIVQzw3o2/Episodes?UserId=2b1ec0a52b09456c9823a367d84ac9e5&ExcludeLocationTypes=Virtual&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&SeasonId=rXlq4EHNxq4HIVQzw3o2/1'
 // generate episode overview for one season of a show
 func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
@@ -635,6 +487,322 @@ func showsEpisodesHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(response, w)
 }
 
+// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Backdrop?tag=7cec54f0c8f362c75588e83d76fefa75'
+// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Logo?tag=e28fbe648d2dbb76b65c14f14e6b1d72'
+// curl -v 'http://127.0.0.1:9090/Items/q2e2UzCOd9zkmJenIOph/Images/Primary?tag=70931a7d8c147c9e2c0aafbad99e03e5'
+// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Primary?tag=268b80952354f01d5a184ed64b36dd52'
+// curl -v 'http://127.0.0.1:9090/Items/2vx0ZYKeHxbh5iWhloIB/Images/Primary?tag=redirect_https://image.tmdb.org/t/p/original/3E4x5doNuuu6i9Mef6HPrlZjNb1.jpg'
+
+func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
+	// handle tag-based redirects for item imagery that is external (e.g. external images of actors)
+	// for these we do not care about the provided item id
+	queryparams := r.URL.Query()
+	tag := queryparams.Get("tag")
+	if strings.HasPrefix(tag, tagprefix_redirect) {
+		http.Redirect(w, r, strings.TrimPrefix(tag, tagprefix_redirect), http.StatusFound)
+		return
+	}
+	if strings.HasPrefix(tag, tagprefix_file) {
+		serveFile(w, r, strings.TrimPrefix(tag, tagprefix_file))
+		return
+	}
+
+	vars := mux.Vars(r)
+	itemId := vars["item"]
+	if strings.HasPrefix(itemId, itemprefix_episode) {
+		c, item, _, episode := getEpisodeByID(itemId)
+		if episode == nil {
+			http.Error(w, "Item not found (could not find episode)", http.StatusNotFound)
+			return
+		}
+		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Thumb)
+		return
+	}
+
+	c, i := getItemByID(itemId)
+	if i == nil {
+		http.Error(w, "Item not found", http.StatusNotFound)
+		return
+	}
+
+	switch vars["type"] {
+	case "Primary":
+		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"poster.jpg")
+		return
+	case "Backdrop":
+		// fixme: some formats use <basepath-including-filename>-fanart.jpg
+		// should check for presence of such file?
+		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"fanart.jpg")
+		return
+		// We do not have artwork on disk for logo requests
+		// case "Logo":
+		// return
+	}
+	log.Printf("Unknown image type requested: %s\n", vars["type"])
+	http.Error(w, "Item image not found", http.StatusNotFound)
+}
+
+// curl -v 'http://127.0.0.1:9090/Items/68d73f6f48efedb7db697bf9fee580cb/PlaybackInfo?UserId=2b1ec0a52b09456c9823a367d84ac9e5'
+func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
+	// vars := mux.Vars(r)
+	// itemId := vars["item"]
+
+	// c, i := getItemByID(itemId)
+	// if i == nil || i.Video == "" {
+	// 	http.Error(w, "Item not found", http.StatusNotFound)
+	// 	return
+	// }
+	// item := buildJFItem(c, i, true)
+
+	response := JFUsersPlaybackInfoResponse{
+		MediaSources:  buildMediaSource("test.mp4", nil),
+		PlaySessionID: "fc3b27127bf84ed89a300c6285d697e2",
+	}
+	serveJSON(response, w)
+}
+
+// return information about commercial, preview, recap, outro, intro segments
+// of an item, not supported.
+func mediaSegmentsHandler(w http.ResponseWriter, r *http.Request) {
+	response := UserItemsResponse{
+		Items:            []JFItem{},
+		TotalRecordCount: 0,
+		StartIndex:       0,
+	}
+	serveJSON(response, w)
+}
+
+// curl -v -I 'http://127.0.0.1:9090/Videos/NrXTYiS6xAxFj4QAiJoT/stream'
+
+func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	itemId := vars["item"]
+
+	// Is episode?
+	if strings.HasPrefix(itemId, itemprefix_episode) {
+		c, item, _, episode := getEpisodeByID(itemId)
+		if episode == nil {
+			http.Error(w, "Could not find episode", http.StatusNotFound)
+			return
+		}
+		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Video)
+		return
+	}
+
+	c, i := getItemByID(vars["item"])
+	if i == nil || i.Video == "" {
+		http.Error(w, "Item not found", http.StatusNotFound)
+		return
+	}
+	serveFile(w, r, c.Directory+"/"+i.Name+"/"+i.Video)
+}
+
+// return list of actors (hit by Infuse's search)
+// not supported
+func personsHandler(w http.ResponseWriter, r *http.Request) {
+	response := UserItemsResponse{
+		Items:            []JFItem{},
+		TotalRecordCount: 0,
+		StartIndex:       0,
+	}
+	serveJSON(response, w)
+}
+
+// session play state handling
+// not supported
+func sessionsPlayingHandler(w http.ResponseWriter, r *http.Request) {
+	_, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+	defer r.Body.Close()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// curl -v 'http://127.0.0.1:9090/Shows/NextUp?UserId=2b1ec0a52b09456c9823a367d84ac9e5&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&StartIndex=0&Limit=20'
+
+func showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
+	c, i := getItemByID("rVFG3EzPthk2wowNkqUl")
+	response := JFShowsNextUpResponse{
+		Items: []JFItem{
+			buildJFItem(c, i, true),
+		},
+		TotalRecordCount: 1,
+		StartIndex:       0,
+	}
+	serveJSON(response, w)
+}
+
+// misc stuff
+func serveFile(w http.ResponseWriter, r *http.Request, filename string) {
+	file, err := os.Open(filename)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	fileStat, err := file.Stat()
+	if err != nil {
+		http.Error(w, "Could not retrieve file info", http.StatusInternalServerError)
+		return
+	}
+	http.ServeContent(w, r, fileStat.Name(), fileStat.ModTime(), file)
+}
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+func buildJFItemCollection(itemid string) (response JFItem, e error) {
+	if !strings.HasPrefix(itemid, itemprefix_collection) {
+		e = errors.New("malformed collection id")
+		return
+	}
+
+	collectionid := strings.TrimPrefix(itemid, itemprefix_collection)
+	c := getCollection(collectionid)
+	if c == nil {
+		e = errors.New("collection not found")
+		return
+	}
+
+	itemID := genCollectionID(c.SourceId)
+	response = JFItem{
+		Name:                     c.Name_,
+		ServerID:                 serverID,
+		ID:                       itemID,
+		Etag:                     idHash(itemID),
+		DateCreated:              time.Now().UTC(),
+		Type:                     "CollectionFolder",
+		IsFolder:                 true,
+		EnableMediaSourceDisplay: true,
+		ChildCount:               len(c.Items),
+		DisplayPreferencesID:     displayPreferencesID,
+		ExternalUrls:             []JFExternalUrls{},
+		PlayAccess:               "Full",
+		PrimaryImageAspectRatio:  1.7777777777777777,
+		RemoteTrailers:           []JFRemoteTrailers{},
+		LocationType:             "FileSystem",
+		Path:                     "/collection",
+		LockData:                 false,
+		MediaType:                "Unknown",
+		ParentID:                 "e9d5075a555c1cbc394eec4cef295274",
+		CanDelete:                false,
+		CanDownload:              false,
+		SpecialFeatureCount:      0,
+	}
+	switch c.Type {
+	case "movies":
+		response.CollectionType = collectionTypeMovies
+	case "shows":
+		response.CollectionType = collectionTypeTVShows
+	}
+	response.SortName = response.CollectionType
+	return
+}
+
+// buildJFItem builds movie or show from db
+func buildJFItem(c *Collection, i *Item, listView bool) (response JFItem) {
+	response = JFItem{
+		ID:                      i.Id,
+		ParentID:                idHash(c.Name_),
+		ServerID:                serverID,
+		Name:                    i.Name,
+		OriginalTitle:           i.Name,
+		SortName:                i.Name,
+		ForcedSortName:          i.Name,
+		Etag:                    idHash(i.Id),
+		DateCreated:             time.Unix(i.FirstVideo/1000, 0).UTC(),
+		PremiereDate:            time.Unix(i.FirstVideo/1000, 0).UTC(),
+		PrimaryImageAspectRatio: 0.6666666666666666,
+	}
+
+	response.ImageTags = &JFImageTags{
+		Primary: "primary_" + i.Id,
+	}
+
+	// Required to have Infuse load backdrop of episode
+	response.BackdropImageTags = []string{
+		response.ID,
+	}
+
+	if c.Type == "movies" {
+		response.Type = "Movie"
+		response.IsFolder = false
+		response.LocationType = "FileSystem"
+		response.Path = "file.mp4"
+		response.MediaType = "Video"
+		response.VideoType = "VideoFile"
+		response.Container = "mov,mp4,m4a"
+
+		lazyLoadNFO(&i.Nfo, i.NfoPath)
+		filename := c.Directory + "/" + i.Name + "/" + i.Video
+		response.MediaSources = buildMediaSource(filename, i.Nfo)
+
+		// listview = true, movie carousel return both primary and BackdropImageTags
+		// non-listview = false, remove primary (thumbnail) image reference
+		if !listView {
+			response.ImageTags = nil
+		}
+	}
+
+	if c.Type == "shows" {
+		response.Type = "Series"
+		response.IsFolder = true
+		response.ChildCount = len(i.Seasons)
+	}
+
+	enrichResponseWithNFO(&response, i.Nfo)
+
+	return response
+}
+
+// buildJFItemSeason builds season
+func buildJFItemSeason(seasonid string) (response JFItem, err error) {
+	_, show, season := getSeasonByID(seasonid)
+	if season == nil {
+		err = errors.New("could not find season")
+		return
+	}
+
+	// seasonId := show.ID + "/" + fmt.Sprintf("%d", s.SeasonNo)
+	response = JFItem{
+		Type:               "Season",
+		ServerID:           serverID,
+		ParentID:           show.Id,
+		SeriesID:           show.Id,
+		ID:                 itemprefix_season + seasonid,
+		Etag:               idHash(seasonid),
+		SeriesName:         show.Name,
+		IndexNumber:        season.SeasonNo,
+		Name:               fmt.Sprintf("Season %d", season.SeasonNo),
+		SortName:           fmt.Sprintf("%04d", season.SeasonNo),
+		IsFolder:           true,
+		LocationType:       "FileSystem",
+		MediaType:          "Unknown",
+		ChildCount:         len(season.Episodes),
+		RecursiveItemCount: len(season.Episodes),
+		DateCreated:        time.Now().UTC(),
+		PremiereDate:       time.Now().UTC(),
+		ImageTags: &JFImageTags{
+			Primary: "season",
+		},
+	}
+	return response, nil
+}
+
 // buildJFItemEpisode builds episode
 func buildJFItemEpisode(episodeid string) (response JFItem, err error) {
 	_, show, _, episode := getEpisodeByID(episodeid)
@@ -664,9 +832,8 @@ func buildJFItemEpisode(episodeid string) (response JFItem, err error) {
 		},
 	}
 
-	log.Printf("episode timestamp: %d, %v+\n", episode.VideoTS, response.DateCreated)
-
-	// Get a bunch of metadata from series-level nfo
+	// Get a bunch of metadata from show-level nfo
+	lazyLoadNFO(&show.Nfo, show.NfoPath)
 	if show.Nfo != nil {
 		enrichResponseWithNFO(&response, show.Nfo)
 	}
@@ -675,18 +842,27 @@ func buildJFItemEpisode(episodeid string) (response JFItem, err error) {
 	response.OfficialRating = ""
 	response.CommunityRating = 0
 
-	// Enrich and override metadata using episode nfo, if available, as it is more specific
-	file, err := os.Open(episode.NfoPath)
-	if err == nil {
-		episodeNfo := decodeNfo(file)
-		file.Close()
-		enrichResponseWithNFO(&response, episodeNfo)
+	// Enrich and override metadata using episode nfo, if available, as it is more specific than data from show
+	lazyLoadNFO(&episode.Nfo, episode.NfoPath)
+	if episode.Nfo != nil {
+		enrichResponseWithNFO(&response, episode.Nfo)
 	}
 
 	// Add some generic mediasource to indicate "720p, stereo"
-	response.MediaSources = buildMediaSource(episode.Video)
+	response.MediaSources = buildMediaSource(episode.Video, episode.Nfo)
 
 	return response, nil
+}
+
+func lazyLoadNFO(n **Nfo, filename string) {
+	// NFO already loaded and parsed?
+	if *n != nil {
+		return
+	}
+	if file, err := os.Open(filename); err == nil {
+		defer file.Close()
+		*n = decodeNfo(file)
+	}
 }
 
 func enrichResponseWithNFO(response *JFItem, n *Nfo) {
@@ -777,263 +953,186 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 	}
 }
 
-func buildMediaSource(filename string) (mediasources []JFMediaSources) {
+func buildMediaSource(filename string, n *Nfo) (mediasources []JFMediaSources) {
 	// todo: this should be replaced with actual mp4 file detail gathering
 	basename := filepath.Base(filename)
-	mediasources = []JFMediaSources{
-		{
-			ID:                    idHash(filename),
-			ETag:                  idHash(filename),
-			Name:                  basename,
-			Path:                  basename,
-			Type:                  "Default",
-			Container:             "mp4",
-			Protocol:              "File",
-			VideoType:             "VideoFile",
-			Size:                  4264940672,
-			IsRemote:              false,
-			ReadAtNativeFramerate: false,
-			IgnoreDts:             false,
-			IgnoreIndex:           false,
-			GenPtsInput:           false,
-			SupportsTranscoding:   true,
-			SupportsDirectStream:  true,
-			SupportsDirectPlay:    true,
-			IsInfiniteStream:      false,
-			RequiresOpening:       false,
-			RequiresClosing:       false,
-			RequiresLooping:       false,
-			SupportsProbing:       true,
-			Formats:               []string{},
-			MediaStreams: []JFMediaStreams{
-				{
-					Codec:                  "h264",
-					CodecTag:               "avc1",
-					Language:               "eng",
-					TimeBase:               "1/16000",
-					VideoRange:             "SDR",
-					VideoRangeType:         "SDR",
-					AudioSpatialFormat:     "None",
-					DisplayTitle:           "720p H264 SDR",
-					NalLengthSize:          "4",
-					IsInterlaced:           false,
-					IsAVC:                  true,
-					BitDepth:               8,
-					RefFrames:              1,
-					IsDefault:              true,
-					IsForced:               false,
-					IsHearingImpaired:      false,
-					Height:                 546,
-					Width:                  1280,
-					AverageFrameRate:       23.98,
-					RealFrameRate:          23.98,
-					Profile:                "High",
-					Type:                   "Video",
-					AspectRatio:            "2.35:1",
-					Index:                  0,
-					IsExternal:             false,
-					IsTextSubtitleStream:   false,
-					SupportsExternalStream: false,
-					PixelFormat:            "yuv420p",
-					Level:                  41,
-					IsAnamorphic:           false,
-				},
-				{
-					Codec:                  "aac",
-					CodecTag:               "mp4a",
-					Language:               "eng",
-					TimeBase:               "1/48000",
-					VideoRange:             "Unknown",
-					VideoRangeType:         "Unknown",
-					AudioSpatialFormat:     "None",
-					LocalizedDefault:       "Default",
-					LocalizedExternal:      "External",
-					DisplayTitle:           "English - AAC - Stereo - Default",
-					IsInterlaced:           false,
-					IsAVC:                  false,
-					ChannelLayout:          "stereo",
-					BitRate:                255577,
-					Channels:               2,
-					SampleRate:             48000,
-					IsDefault:              true,
-					IsForced:               false,
-					IsHearingImpaired:      false,
-					Profile:                "LC",
-					Type:                   "Audio",
-					Index:                  1,
-					IsExternal:             false,
-					IsTextSubtitleStream:   false,
-					SupportsExternalStream: false,
-					Level:                  0,
-				},
-			},
-			RequiredHTTPHeaders:    JFRequiredHTTPHeaders{},
-			TranscodingSubProtocol: "http",
-			// DefaultAudioStreamIndex: 1,
-		},
-	}
-	return
-}
-
-// curl -v 'http://127.0.0.1:9090/Shows/NextUp?UserId=2b1ec0a52b09456c9823a367d84ac9e5&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&StartIndex=0&Limit=20'
-
-func showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
-	c, i := getItemByID("rVFG3EzPthk2wowNkqUl")
-	response := JFShowsNextUpResponse{
-		Items: []JFItem{
-			buildJFItem(c, i, true),
-		},
-		TotalRecordCount: 1,
-		StartIndex:       0,
-	}
-	serveJSON(response, w)
-}
-
-// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Backdrop?tag=7cec54f0c8f362c75588e83d76fefa75'
-// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Logo?tag=e28fbe648d2dbb76b65c14f14e6b1d72'
-// curl -v 'http://127.0.0.1:9090/Items/q2e2UzCOd9zkmJenIOph/Images/Primary?tag=70931a7d8c147c9e2c0aafbad99e03e5'
-// curl -v 'http://127.0.0.1:9090/Items/rVFG3EzPthk2wowNkqUl/Images/Primary?tag=268b80952354f01d5a184ed64b36dd52'
-// curl -v 'http://127.0.0.1:9090/Items/2vx0ZYKeHxbh5iWhloIB/Images/Primary?tag=redirect_https://image.tmdb.org/t/p/original/3E4x5doNuuu6i9Mef6HPrlZjNb1.jpg'
-
-func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
-	// handle tag-based redirects for item imagery that is external (e.g. external images of actors)
-	// for these we do not care about the provided item id
-	queryparams := r.URL.Query()
-	tag := queryparams.Get("tag")
-	if strings.HasPrefix(tag, tagprefix_redirect) {
-		http.Redirect(w, r, strings.TrimPrefix(tag, tagprefix_redirect), http.StatusFound)
-		return
-	}
-	if strings.HasPrefix(tag, tagprefix_file) {
-		serveFile(w, r, strings.TrimPrefix(tag, tagprefix_file))
-		return
+	source := JFMediaSources{
+		ID:                    idHash(filename),
+		ETag:                  idHash(filename),
+		Name:                  basename,
+		Path:                  basename,
+		Type:                  "Default",
+		Container:             "mp4",
+		Protocol:              "File",
+		VideoType:             "VideoFile",
+		Size:                  4264940672,
+		IsRemote:              false,
+		ReadAtNativeFramerate: false,
+		IgnoreDts:             false,
+		IgnoreIndex:           false,
+		GenPtsInput:           false,
+		SupportsTranscoding:   true,
+		SupportsDirectStream:  true,
+		SupportsDirectPlay:    true,
+		IsInfiniteStream:      false,
+		RequiresOpening:       false,
+		RequiresClosing:       false,
+		RequiresLooping:       false,
+		SupportsProbing:       true,
+		Formats:               []string{},
 	}
 
-	vars := mux.Vars(r)
-	itemId := vars["item"]
-	if strings.HasPrefix(itemId, itemprefix_episode) {
-		c, item, _, episode := getEpisodeByID(itemId)
-		if episode == nil {
-			http.Error(w, "Item not found (could not find episode)", http.StatusNotFound)
-			return
-		}
-		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Thumb)
-		return
+	if n == nil || n.FileInfo == nil || n.FileInfo.StreamDetails == nil {
+		return []JFMediaSources{source}
 	}
 
-	c, i := getItemByID(itemId)
-	if i == nil {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
+	// Create high-level video & audio channnel details based upon NFO
+	NfoVideo := n.FileInfo.StreamDetails.Video
+	source.Bitrate = NfoVideo.Bitrate
+	source.RunTimeTicks = int64(NfoVideo.DurationInSeconds) * 10000000
+
+	// Take first alpha-3 language, ignore others
+	language := n.FileInfo.StreamDetails.Audio.Language[0:3]
+
+	videostream := JFMediaStreams{
+		Index:            0,
+		Type:             "Video",
+		IsDefault:        true,
+		Language:         language,
+		AverageFrameRate: math.Round(float64(NfoVideo.FrameRate*100)) / 100,
+		RealFrameRate:    math.Round(float64(NfoVideo.FrameRate*100)) / 100,
+		TimeBase:         "1/16000",
+		Height:           NfoVideo.Height,
+		Width:            NfoVideo.Width,
+		Codec:            NfoVideo.Codec,
+	}
+	switch strings.ToLower(NfoVideo.Codec) {
+	case "x264":
+		fallthrough
+	case "h264":
+		videostream.Codec = "h264"
+		videostream.CodecTag = "avc1"
+	case "hevc":
+		videostream.Codec = "hevc"
+		videostream.CodecTag = "hvc1"
+	default:
+		log.Printf("Nfo of %s has unknown video codec %s", filename, NfoVideo.Codec)
 	}
 
-	switch vars["type"] {
-	case "Primary":
-		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"poster.jpg")
-		return
-	case "Backdrop":
-		// fixme: some formats use <basepath-including-filename>-fanart.jpg
-		// should check for presence of such file?
-		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"fanart.jpg")
-		return
-		// We do not have artwork on disk for logo requests
-		// case "Logo":
-		// return
+	source.MediaStreams = append(source.MediaStreams, videostream)
+
+	// Atempt to produce some audio channel detail based upon high-level NFO
+	audiostream := JFMediaStreams{
+		Index:              1,
+		Type:               "Audio",
+		Language:           language,
+		Codec:              "aac",
+		CodecTag:           "mp4a",
+		TimeBase:           "1/48000",
+		SampleRate:         48000,
+		AudioSpatialFormat: "None",
+		LocalizedDefault:   "Default",
+		LocalizedExternal:  "External",
+		DisplayTitle:       "English - AAC - Stereo - Default",
+		IsInterlaced:       false,
+		IsAVC:              false,
+		IsDefault:          true,
+		Profile:            "LC",
 	}
-	log.Printf("Unknown image type requested: %s\n", vars["type"])
-	http.Error(w, "Item image not found", http.StatusNotFound)
-}
 
-// curl -v 'http://127.0.0.1:9090/Items/68d73f6f48efedb7db697bf9fee580cb/PlaybackInfo?UserId=2b1ec0a52b09456c9823a367d84ac9e5'
-func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
-	// vars := mux.Vars(r)
-	// itemId := vars["item"]
+	NfoAudio := n.FileInfo.StreamDetails.Audio
+	audiostream.BitRate = NfoAudio.Bitrate
+	audiostream.Channels = NfoAudio.Channels
 
-	// c, i := getItemByID(itemId)
-	// if i == nil || i.Video == "" {
-	// 	http.Error(w, "Item not found", http.StatusNotFound)
-	// 	return
+	switch NfoAudio.Channels {
+	case 2:
+		audiostream.Title = "Stereo"
+		audiostream.ChannelLayout = "stereo"
+	case 6:
+		audiostream.Title = "5.1 Channel"
+		audiostream.ChannelLayout = "5.1"
+	default:
+		log.Printf("Nfo of %s has unknown audio channel configuration %d", filename, NfoAudio.Channels)
+	}
+
+	switch strings.ToLower(NfoAudio.Codec) {
+	case "ac3":
+		audiostream.Codec = "ac3"
+		audiostream.CodecTag = "ac-3"
+	case "aac":
+		audiostream.Codec = "aac"
+		audiostream.CodecTag = "mp4a"
+	default:
+		log.Printf("Nfo of %s has unknown audio codec %s", filename, NfoAudio.Codec)
+	}
+
+	audiostream.DisplayTitle = audiostream.Title + " - " + strings.ToUpper(audiostream.Codec)
+
+	source.MediaStreams = append(source.MediaStreams, audiostream)
+
+	// MediaStreams: []JFMediaStreams{
+	// 		{
+	// 			Codec:                  "aac",
+	// 			CodecTag:               "mp4a",
+	// 			Language:               "eng",
+	// 			TimeBase:               "1/48000",
+	// 			VideoRange:             "Unknown",
+	// 			VideoRangeType:         "Unknown",
+	// 			AudioSpatialFormat:     "None",
+	// 			LocalizedDefault:       "Default",
+	// 			LocalizedExternal:      "External",
+	// 			DisplayTitle:           "English - AAC - Stereo - Default",
+	// 			IsInterlaced:           false,
+	// 			IsAVC:                  false,
+	// 			ChannelLayout:          "stereo",
+	// 			BitRate:                255577,
+	// 			Channels:               2,
+	// 			SampleRate:             48000,
+	// 			IsDefault:              true,
+	// 			IsForced:               false,
+	// 			IsHearingImpaired:      false,
+	// 			Profile:                "LC",
+	// 			Type:                   "Audio",
+	// 			Index:                  1,
+	// 			IsExternal:             false,
+	// 			IsTextSubtitleStream:   false,
+	// 			SupportsExternalStream: false,
+	// 			Level:                  0,
+	// 		},
+	// 	},
+	// 	RequiredHTTPHeaders:    JFRequiredHTTPHeaders{},
+	// 	TranscodingSubProtocol: "http",
+	// 	// DefaultAudioStreamIndex: 1,
 	// }
-	// item := buildJFItem(c, i, true)
-
-	response := JFUsersPlaybackInfoResponse{
-		MediaSources:  buildMediaSource("test.mp4"),
-		PlaySessionID: "fc3b27127bf84ed89a300c6285d697e2",
-	}
-	serveJSON(response, w)
-}
-
-// return commercial, preview, recap, outro, intro segments of an item
-func mediaSegmentsHandler(w http.ResponseWriter, r *http.Request) {
-	response := UserItemsResponse{
-		Items:            []JFItem{},
-		TotalRecordCount: 0,
-		StartIndex:       0,
-	}
-	serveJSON(response, w)
-}
-
-// curl -v -I 'http://127.0.0.1:9090/Videos/NrXTYiS6xAxFj4QAiJoT/stream'
-
-func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	itemId := vars["item"]
-
-	// Is episode?
-	if strings.HasPrefix(itemId, itemprefix_episode) {
-		c, item, _, episode := getEpisodeByID(itemId)
-		if episode == nil {
-			http.Error(w, "Could not find episode", http.StatusNotFound)
-			return
-		}
-		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Video)
-		return
-	}
-
-	c, i := getItemByID(vars["item"])
-	if i == nil || i.Video == "" {
-		http.Error(w, "Item not found", http.StatusNotFound)
-		return
-	}
-	serveFile(w, r, c.Directory+"/"+i.Name+"/"+i.Video)
-}
-
-// return list of actors (used by Infuse's search)
-func personsHandler(w http.ResponseWriter, r *http.Request) {
-	response := UserItemsResponse{
-		Items:            []JFItem{},
-		TotalRecordCount: 0,
-		StartIndex:       0,
-	}
-	serveJSON(response, w)
-}
-
-// session handling
-func sessionsPlayingHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Error reading request body", http.StatusInternalServerError)
-		return
-	}
-	defer r.Body.Close()
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// misc stuff
-func serveFile(w http.ResponseWriter, r *http.Request, filename string) {
-	file, err := os.Open(filename)
-	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return
-	}
-	defer file.Close()
-
-	fileStat, err := file.Stat()
-	if err != nil {
-		http.Error(w, "Could not retrieve file info", http.StatusInternalServerError)
-		return
-	}
-	http.ServeContent(w, r, fileStat.Name(), fileStat.ModTime(), file)
+	// {
+	// 	"Codec": "ac3",
+	// 	"CodecTag": "ac-3",
+	// 	"Language": "eng",
+	// 	"TimeBase": "1/48000",
+	// 	"Title": "5.1 Channel",
+	// 	"VideoRange": "Unknown",
+	// 	"VideoRangeType": "Unknown",
+	// 	"AudioSpatialFormat": "None",
+	// 	"LocalizedDefault": "Default",
+	// 	"LocalizedExternal": "External",
+	// 	"DisplayTitle": "5.1 Channel - English - Dolby Digital - Default",
+	// 	"IsInterlaced": false,
+	// 	"IsAVC": false,
+	// 	"ChannelLayout": "5.1",
+	// 	"BitRate": 256000,
+	// 	"Channels": 6,
+	// 	"SampleRate": 48000,
+	// 	"IsDefault": true,
+	// 	"IsForced": false,
+	// 	"IsHearingImpaired": false,
+	// 	"Type": "Audio",
+	// 	"Index": 1,
+	// 	"IsExternal": false,
+	// 	"IsTextSubtitleStream": false,
+	// 	"SupportsExternalStream": false,
+	// 	"Level": 0
+	//     },
+	return []JFMediaSources{source}
 }
 
 func genCollectionID(id int) (collectionID string) {

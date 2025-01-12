@@ -36,7 +36,7 @@ type JFUserConfiguration struct {
 	SubtitleLanguagePreference string   `json:"SubtitleLanguagePreference"`
 	DisplayMissingEpisodes     bool     `json:"DisplayMissingEpisodes"`
 	GroupedFolders             []string `json:"GroupedFolders"`
-	SubtitleMode               string   `json:"SubtitleMode"`
+	// SubtitleMode               string   `json:"SubtitleMode"`
 	DisplayCollectionsView     bool     `json:"DisplayCollectionsView"`
 	EnableLocalPassword        bool     `json:"EnableLocalPassword"`
 	OrderedViews               []string `json:"OrderedViews"`
@@ -244,6 +244,7 @@ type JFExternalUrls struct {
 	URL  string `json:"Url"`
 }
 type JFMediaStreams struct {
+	Title                  string  `json:"Title"`
 	Codec                  string  `json:"Codec"`
 	CodecTag               string  `json:"CodecTag,omitempty"`
 	Language               string  `json:"Language,omitempty"`
