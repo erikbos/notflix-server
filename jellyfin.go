@@ -1,10 +1,14 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -650,20 +654,6 @@ func serveFile(w http.ResponseWriter, r *http.Request, filename string) {
 	}
 	http.ServeContent(w, r, fileStat.Name(), fileStat.ModTime(), file)
 }
-
-package main
-
-import (
-	"errors"
-	"fmt"
-	"log"
-	"math"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
-)
 
 func buildJFItemCollection(itemid string) (response JFItem, e error) {
 	if !strings.HasPrefix(itemid, itemprefix_collection) {
