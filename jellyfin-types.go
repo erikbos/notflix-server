@@ -462,3 +462,22 @@ type JFMediaLibrary struct {
 	PrimaryImageItemId string           `json:"PrimaryImageItemId,omitempty"`
 	RefreshStatus      string           `json:"RefreshStatus,omitempty"`
 }
+
+type JFPlayState struct {
+	CanSeek         bool   `json:"CanSeek"`
+	RepeatMode      string `json:"RepeatMode"`
+	PositionTicks   int    `json:"PositionTicks"`
+	PlaySessionID   string `json:"PlaySessionId"`
+	MediaSourceID   string `json:"MediaSourceId"`
+	ItemID          string `json:"ItemId"`
+	PlayMethod      string `json:"PlayMethod"`
+	IsMuted         bool   `json:"IsMuted"`
+	EventName       string `json:"EventName"`
+	NowPlayingQueue []struct {
+		PlaylistItemID string `json:"PlaylistItemId"`
+		ID             string `json:"Id"`
+	} `json:"NowPlayingQueue"`
+	PlaylistLength int  `json:"PlaylistLength"`
+	PlaylistIndex  int  `json:"PlaylistIndex"`
+	IsPaused       bool `json:"IsPaused"`
+}

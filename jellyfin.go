@@ -1,9 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -53,7 +53,8 @@ func registerJellyfinHandlers(s *mux.Router) {
 	r.Handle("/Persons", gzip(personsHandler))
 
 	r.Handle("/Sessions/Playing", gzip(sessionsPlayingHandler)).Methods("POST")
-	r.Handle("/Sessions/Playing/Progress", gzip(sessionsPlayingHandler)).Methods("POST")
+	r.Handle("/Sessions/Playing/Progress", gzip(sessionsPlayingProgressHandler)).Methods("POST")
+	r.Handle("/Sessions/Playing/Stopped", gzip(sessionsPlayingStoppedHandler)).Methods("POST")
 }
 
 const (
@@ -80,7 +81,7 @@ const (
 var loggedInUser = JFUser{
 	Id:                        userID,
 	ServerId:                  serverID,
-	Name:                      "erik",
+	Name:                      "user",
 	HasPassword:               true,
 	HasConfiguredPassword:     true,
 	HasConfiguredEasyPassword: false,
@@ -91,9 +92,11 @@ var loggedInUser = JFUser{
 
 // curl -v http://127.0.0.1:9090/System/Info/Public
 func systemInfoHandler(w http.ResponseWriter, r *http.Request) {
+	hostname, _ := os.Hostname()
+
 	response := JFSystemInfoResponse{
 		Id:           serverID,
-		LocalAddress: "http://localhost:9090",
+		LocalAddress: "http://" + hostname + ":9090/",
 		// Jellyfin native client checks for exact productname :facepalm:
 		// https://github.com/jellyfin/jellyfin-expo/blob/7dedbc72fb53fc4b83c3967c9a8c6c071916425b/utils/ServerValidator.js#L82C49-L82C64
 		ProductName: "Jellyfin Server",
@@ -302,7 +305,7 @@ func usersItemsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if collectionid == "" {
-		// todo: this could be a search by person :)
+		// TODO: this could be a search by person :)
 		http.Error(w, "Collection not found", http.StatusNotFound)
 		return
 	}
@@ -513,14 +516,47 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	itemId := vars["item"]
-	if strings.HasPrefix(itemId, itemprefix_episode) {
-		c, item, _, episode := getEpisodeByID(itemId)
-		if episode == nil {
-			http.Error(w, "Item not found (could not find episode)", http.StatusNotFound)
+	imageType := vars["type"]
+
+	splitted := strings.Split(itemId, "_")
+	if len(splitted) == 2 {
+		switch splitted[0] {
+		// case "collection":
+		// 	collectionItem, err := buildJFItemCollection(itemId)
+		// 	if err != nil {
+		// 		http.Error(w, "Could not find collection", http.StatusNotFound)
+		// 		return
+
+		// 	}
+		// 	serveJSON(collectionItem, w)
+		// 	return
+		case "season":
+			c, item, season := getSeasonByID(itemId)
+			if season == nil {
+				http.Error(w, "Could not find season", http.StatusNotFound)
+				return
+			}
+			switch imageType {
+			case "Primary":
+				serveFile(w, r, c.Directory+"/"+item.Name+"/"+season.Poster)
+				return
+			default:
+				log.Printf("Image request %s, unknown type %s", itemId, imageType)
+				return
+			}
+		case "episode":
+			c, item, _, episode := getEpisodeByID(itemId)
+			if episode == nil {
+				http.Error(w, "Item not found (could not find episode)", http.StatusNotFound)
+				return
+			}
+			serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Thumb)
+			return
+		default:
+			log.Printf("Image request for unknown prefix %s!", itemId)
+			http.Error(w, "Unknown image item prefix", http.StatusInternalServerError)
 			return
 		}
-		serveFile(w, r, c.Directory+"/"+item.Name+"/"+episode.Thumb)
-		return
 	}
 
 	c, i := getItemByID(itemId)
@@ -531,12 +567,10 @@ func itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch vars["type"] {
 	case "Primary":
-		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"poster.jpg")
+		serveFile(w, r, c.Directory+"/"+i.Name+"/"+i.Poster)
 		return
 	case "Backdrop":
-		// fixme: some formats use <basepath-including-filename>-fanart.jpg
-		// should check for presence of such file?
-		serveFile(w, r, c.Directory+"/"+i.Name+"/"+"fanart.jpg")
+		serveFile(w, r, c.Directory+"/"+i.Name+"/"+i.Fanart)
 		return
 		// We do not have artwork on disk for logo requests
 		// case "Logo":
@@ -559,7 +593,9 @@ func itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Request) {
 	// item := buildJFItem(c, i, true)
 
 	response := JFUsersPlaybackInfoResponse{
-		MediaSources:  buildMediaSource("test.mp4", nil),
+		MediaSources: buildMediaSource("test.mp4", nil),
+		// TODO this static id should be generated based upon authenticated user
+		// this id is used when submitting playstate via /Sessions/Playing
 		PlaySessionID: "fc3b27127bf84ed89a300c6285d697e2",
 	}
 	serveJSON(response, w)
@@ -612,18 +648,6 @@ func personsHandler(w http.ResponseWriter, r *http.Request) {
 	serveJSON(response, w)
 }
 
-// session play state handling
-// not supported
-func sessionsPlayingHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Error reading request body", http.StatusInternalServerError)
-		return
-	}
-	defer r.Body.Close()
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // curl -v 'http://127.0.0.1:9090/Shows/NextUp?UserId=2b1ec0a52b09456c9823a367d84ac9e5&Fields=DateCreated,Etag,Genres,MediaSources,AlternateMediaSources,Overview,ParentId,Path,People,ProviderIds,SortName,RecursiveItemCount,ChildCount&StartIndex=0&Limit=20'
 
 func showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
@@ -636,6 +660,39 @@ func showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
 		StartIndex:       0,
 	}
 	serveJSON(response, w)
+}
+
+func sessionsPlayingHandler(w http.ResponseWriter, r *http.Request) {
+	var request JFPlayState
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	log.Printf("sessionsPlayingHandler %+v\n", request)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func sessionsPlayingProgressHandler(w http.ResponseWriter, r *http.Request) {
+	var request JFPlayState
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	log.Printf("sessionsPlayingProgressHandler %+v\n", request)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func sessionsPlayingStoppedHandler(w http.ResponseWriter, r *http.Request) {
+	var request JFPlayState
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	log.Printf("sessionsPlayingStoppedHandler %+v\n", request)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // misc stuff
@@ -767,7 +824,6 @@ func buildJFItemSeason(seasonid string) (response JFItem, err error) {
 		return
 	}
 
-	// seasonId := show.ID + "/" + fmt.Sprintf("%d", s.SeasonNo)
 	response = JFItem{
 		Type:               "Season",
 		ServerID:           serverID,
@@ -893,7 +949,7 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 
 	if len(n.Genre) != 0 {
 		normalizedGenres := normalizeGenres(n.Genre)
-		// fixme: why do we duplicate both fields?
+		// Why do we populate two response fields with same data?
 		response.Genres = normalizedGenres
 		for _, genre := range normalizedGenres {
 			g := JFGenreItems{
@@ -946,7 +1002,7 @@ func enrichResponseWithNFO(response *JFItem, n *Nfo) {
 func buildMediaSource(filename string, n *Nfo) (mediasources []JFMediaSources) {
 	// todo: this should be replaced with actual mp4 file detail gathering
 	basename := filepath.Base(filename)
-	source := JFMediaSources{
+	mediasource := JFMediaSources{
 		ID:                    idHash(filename),
 		ETag:                  idHash(filename),
 		Name:                  basename,
@@ -973,17 +1029,17 @@ func buildMediaSource(filename string, n *Nfo) (mediasources []JFMediaSources) {
 	}
 
 	if n == nil || n.FileInfo == nil || n.FileInfo.StreamDetails == nil {
-		return []JFMediaSources{source}
+		return []JFMediaSources{mediasource}
 	}
 
-	// Create high-level video & audio channnel details based upon NFO
 	NfoVideo := n.FileInfo.StreamDetails.Video
-	source.Bitrate = NfoVideo.Bitrate
-	source.RunTimeTicks = int64(NfoVideo.DurationInSeconds) * 10000000
+	mediasource.Bitrate = NfoVideo.Bitrate
+	mediasource.RunTimeTicks = int64(NfoVideo.DurationInSeconds) * 10000000
 
 	// Take first alpha-3 language, ignore others
 	language := n.FileInfo.StreamDetails.Audio.Language[0:3]
 
+	// Create video stream with high-level details based upon NFO
 	videostream := JFMediaStreams{
 		Index:            0,
 		Type:             "Video",
@@ -1009,25 +1065,21 @@ func buildMediaSource(filename string, n *Nfo) (mediasources []JFMediaSources) {
 		log.Printf("Nfo of %s has unknown video codec %s", filename, NfoVideo.Codec)
 	}
 
-	source.MediaStreams = append(source.MediaStreams, videostream)
+	mediasource.MediaStreams = append(mediasource.MediaStreams, videostream)
 
-	// Atempt to produce some audio channel detail based upon high-level NFO
+	// Create audio stream with high-level details based upon NFO
 	audiostream := JFMediaStreams{
 		Index:              1,
 		Type:               "Audio",
 		Language:           language,
-		Codec:              "aac",
-		CodecTag:           "mp4a",
 		TimeBase:           "1/48000",
 		SampleRate:         48000,
 		AudioSpatialFormat: "None",
 		LocalizedDefault:   "Default",
 		LocalizedExternal:  "External",
-		DisplayTitle:       "English - AAC - Stereo - Default",
 		IsInterlaced:       false,
 		IsAVC:              false,
 		IsDefault:          true,
-		Profile:            "LC",
 	}
 
 	NfoAudio := n.FileInfo.StreamDetails.Audio
@@ -1058,71 +1110,9 @@ func buildMediaSource(filename string, n *Nfo) (mediasources []JFMediaSources) {
 
 	audiostream.DisplayTitle = audiostream.Title + " - " + strings.ToUpper(audiostream.Codec)
 
-	source.MediaStreams = append(source.MediaStreams, audiostream)
+	mediasource.MediaStreams = append(mediasource.MediaStreams, audiostream)
 
-	// MediaStreams: []JFMediaStreams{
-	// 		{
-	// 			Codec:                  "aac",
-	// 			CodecTag:               "mp4a",
-	// 			Language:               "eng",
-	// 			TimeBase:               "1/48000",
-	// 			VideoRange:             "Unknown",
-	// 			VideoRangeType:         "Unknown",
-	// 			AudioSpatialFormat:     "None",
-	// 			LocalizedDefault:       "Default",
-	// 			LocalizedExternal:      "External",
-	// 			DisplayTitle:           "English - AAC - Stereo - Default",
-	// 			IsInterlaced:           false,
-	// 			IsAVC:                  false,
-	// 			ChannelLayout:          "stereo",
-	// 			BitRate:                255577,
-	// 			Channels:               2,
-	// 			SampleRate:             48000,
-	// 			IsDefault:              true,
-	// 			IsForced:               false,
-	// 			IsHearingImpaired:      false,
-	// 			Profile:                "LC",
-	// 			Type:                   "Audio",
-	// 			Index:                  1,
-	// 			IsExternal:             false,
-	// 			IsTextSubtitleStream:   false,
-	// 			SupportsExternalStream: false,
-	// 			Level:                  0,
-	// 		},
-	// 	},
-	// 	RequiredHTTPHeaders:    JFRequiredHTTPHeaders{},
-	// 	TranscodingSubProtocol: "http",
-	// 	// DefaultAudioStreamIndex: 1,
-	// }
-	// {
-	// 	"Codec": "ac3",
-	// 	"CodecTag": "ac-3",
-	// 	"Language": "eng",
-	// 	"TimeBase": "1/48000",
-	// 	"Title": "5.1 Channel",
-	// 	"VideoRange": "Unknown",
-	// 	"VideoRangeType": "Unknown",
-	// 	"AudioSpatialFormat": "None",
-	// 	"LocalizedDefault": "Default",
-	// 	"LocalizedExternal": "External",
-	// 	"DisplayTitle": "5.1 Channel - English - Dolby Digital - Default",
-	// 	"IsInterlaced": false,
-	// 	"IsAVC": false,
-	// 	"ChannelLayout": "5.1",
-	// 	"BitRate": 256000,
-	// 	"Channels": 6,
-	// 	"SampleRate": 48000,
-	// 	"IsDefault": true,
-	// 	"IsForced": false,
-	// 	"IsHearingImpaired": false,
-	// 	"Type": "Audio",
-	// 	"Index": 1,
-	// 	"IsExternal": false,
-	// 	"IsTextSubtitleStream": false,
-	// 	"SupportsExternalStream": false,
-	// 	"Level": 0
-	//     },
-	return []JFMediaSources{source}
+	return []JFMediaSources{mediasource}
 }
 
 func genCollectionID(id int) (collectionID string) {
@@ -1181,6 +1171,18 @@ func getEpisodeByID(episodeId string) (*Collection, *Item, *Season, *Episode) {
 		}
 	}
 	return nil, nil, nil, nil
+}
+
+func searchItemByName(searchkey string) (*Collection, *Item) {
+	// fixme: wooho O(n^^4) "just temporarily.."
+	for _, c := range config.Collections {
+		for _, i := range c.Items {
+			if strings.Contains(i.Name, searchkey) {
+				return &c, i
+			}
+		}
+	}
+	return nil, nil
 }
 
 func parseTime(input string) (parsedTime time.Time, err error) {
